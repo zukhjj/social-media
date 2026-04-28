@@ -1,0 +1,6 @@
+Flask
+flask-cors
+PyJWT
+psycopg2-binary
+cloudinary
+gunicorn
