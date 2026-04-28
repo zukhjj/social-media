@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+    <script src="login.js"></script>
+    <title>Social Grid</title>
+</head>
+<body>
+   <nav class="navbar" id="pc">
+    <div class="logo"><img src="logo.png" alt=""width="300px" style="margin-top: 80px;"></div>
+
+    <div class="nav-links">
+        <a href="#">Explore</a>
+        <a href="#">Messages</a>
+        <a href="#">Profile</a>
+    </div>
+</nav>
+    <div id="box">
+        <header>
+            
+                <div class="logo" hidden id="phone"><img src="logo.png" alt=""width="300px" style="margin-top: 80px;"></div>
+
+            <h1> social grid</h1>
+        </header>
+        <form id="fo" onsubmit="login(event)">
+            <br>
+            <p class="error" id="toperror"></p>
+            <br>
+            <input type="text" placeholder="email or phone number" id="user" class="user" name="user"><br>
+            <p class="error" id="usererror"></p>
+            <br>
+            <div class="inbox">
+                <img src="open.png" class="ic" id="ic" width="20px" hidden onclick="show()">
+                <input type="password" placeholder="password" id="password" class="password" name="password" onfocus="hide()"><br>
+                <p class="error" id="passworderror"></p>
+            </div><br>
+           <div class="social-login-container">
+    <div class="separator">
+        <span>or continue with</span>
+    </div>
+    <center>
+    <div class="social-box">
+    <div class="line"><span>OR</span></div>
+    <div id="g_id_onload"
+     data-client_id="476976574734-ajctpbmucqco042c6hp49jvsuojgeipr.apps.googleusercontent.com"
+     data-context="signin"
+     data-ux_mode="popup"
+     data-callback="handleCredentialResponse"
+     data-auto_prompt="false">
+</div>
+
+<div class="g_id_signin"
+     data-type="standard"
+     data-shape="pill"
+     data-theme="filled_black"
+     data-text="continue_with"
+     data-size="large"
+     data-logo_alignment="left"
+     data-width="280">
+
+</div>
+</center>
+</div><br>
+            <a href="#for">forgot password?</a><br><br>
+            <input type="submit" value="log in"><br><br>
+            <a href="sign_up.html"><input type="button" value="sing up"></a>
+        </form>
+    </div>
+</body>
+</html>

@@ -1,0 +1,47 @@
+body {
+    margin: 0;
+    height: 100vh;
+    background-color: black;
+}
+
+.splash {
+    position: fixed;
+    inset: 0;
+    backdrop-filter: blur(10px);    
+    -webkit-backdrop-filter: blur(50px); 
+    
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+.logo {
+    width: 360px;
+    margin-bottom: 30px;
+}
+
+/* loader simple + modern */
+.loader {
+    width: 120px;
+    height: 3px;
+    background: rgba(255,255,255,0.1);
+    position: relative;
+    overflow: hidden;
+    border-radius: 10px;
+}
+
+.loader::before {
+    content: "";
+    position: absolute;
+    width: 40px;
+    height: 100%;
+    background: #00ff66;
+    box-shadow: 0 0 10px #00ff66;
+    animation: move 1s infinite linear;
+}
+
+@keyframes move {
+    0% { left: -40px; }
+    100% { left: 120px; }
+}

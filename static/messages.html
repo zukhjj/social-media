@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="icon" href="logo2.png" type="image/png">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Messages - Social Grid</title>
+    <link rel="stylesheet" href="home.css">
+    <link rel="stylesheet" href="messages.css">
+    <script src="home.js" defer></script>
+    <script src="messages.js" defer></script>
+</head>
+<body>
+    <!-- Top Navigation -->
+    <div id="app-bar">
+        <header class="top-bar">
+            <a href="home.html"><img src="logo.png" id="logo" alt="Social Grid Logo"></a>
+            <div class="search-container">
+                <input type="search" id="search-input" class="search-input" placeholder="Search messages..." aria-label="Search">
+                <img src="search.png" class="search-icon" alt="">
+            </div>
+            <img src="unkown.png" id="profile-img" alt="User Profile" class="profile-btn" onclick="loadUserPage(localStorage.getItem('username'))">
+        </header>
+    </div>
+    <!-- Main Chat Layout -->
+    <main class="chat-layout">
+        <!-- Conversations Sidebar -->
+       <aside class="conversations-sidebar">
+    <div class="sidebar-header">
+        <h2>Messages</h2>
+        <button id="new-chat-btn" class="new-chat-btn" onclick="openNewChatModal()">✎</button>
+    </div>
+    
+    <!-- Friends List (Horizontal Scroll) -->
+    <div class="friends-section">
+        <h3 class="section-title">Friends</h3>
+        <div id="friends-list" class="friends-list">
+            <!-- Populated by JS -->
+        </div>
+    </div>
+    
+    <div class="search-users">
+        <input type="text" id="user-search" placeholder="Search people..." oninput="filterConversations(this.value)">
+    </div>
+    <div class="section-title" style="padding:12px 20px 8px;font-size:13px;color:var(--text-muted);font-weight:600;">Conversations</div>
+    <div id="conversations-list" class="conversations-list">
+        <!-- Populated by JS -->
+    </div>
+</aside>
+        <!-- Chat Main Area -->
+        <section class="chat-main" id="chat-main">
+            <!-- Empty State (Visible when no chat is open) -->
+            <div class="empty-state" id="empty-state">
+                <img src="chat.png" alt="" style="width:64px;opacity:0.5;margin-bottom:16px;">
+                <h3>Select a conversation</h3>
+                <p style="color:var(--text-muted);font-size:14px;">Choose a friend from the list or start a new chat</p>
+                <div style="display:flex; gap:12px; margin-top:20px; flex-wrap:wrap; justify-content:center;">
+                    <button id="empty-start-btn" class="primary-btn" onclick="openNewChatModal()">Start New Chat</button>
+                    <button class="home-btn" onclick="window.location.href='/home.html'">🏠 Home</button>
+                </div>
+            </div>
+            <div class="chat-active hidden" id="chat-active">
+                <div class="chat-header">
+                    <div class="chat-user-info">
+                        <button class="chat-back-btn" onclick="exitChat()">←</button>
+                        <img id="chat-avatar" class="chat-avatar" src="unkown.png">
+                        <div>
+                            <div id="chat-username" class="chat-username"></div>
+                            <span id="chat-status" class="chat-status offline"></span>
+                        </div>
+                    </div>
+                </div>
+                <!-- Reply Preview Bar (hidden by default) -->
+<div id="reply-preview-bar" class="reply-bar hidden">
+    <span>↩️ Replying to <strong id="reply-to-name"></strong>:</span>
+    <span id="reply-to-content" class="reply-text"></span>
+    <button id="close-reply-btn" class="close-reply">✕</button>
+</div>
+                <div id="messages-container" class="messages-container"></div>
+                <button id="scroll-bottom-btn" class="scroll-bottom-btn" onclick="scrollToBottom(true)">⬇</button>  
+                <div class="chat-input-wrap">
+                    <input type="text" id="chat-input" class="chat-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendChatMessage()">
+                    <button class="chat-send-btn" onclick="sendChatMessage()">➤</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- New Chat Modal -->
+    <dialog id="new-chat-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Start New Chat</h3>
+                <button class="modal-close" onclick="closeNewChatModal()">✕</button>
+            </div>
+            <input type="text" id="new-chat-search" class="modal-search" placeholder="Search users..." oninput="searchNewChatUsers(this.value)">
+            <div id="new-chat-users" class="modal-users-list"></div>
+        </div>
+    </dialog>
+</body>
+</html>
