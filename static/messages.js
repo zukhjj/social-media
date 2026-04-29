@@ -6,6 +6,39 @@ function getTimeAgo(dateStr) {
     const d = new Date(dateStr.replace(" ", "T") + "Z"), diff = Math.floor((Date.now() - d) / 1000);
     return diff < 60 ? "now" : diff < 3600 ? Math.floor(diff / 60) + "m" : diff < 86400 ? Math.floor(diff / 3600) + "h" : Math.floor(diff / 86400) + "d";
 }
+// ✅ Simple toggle function - works on ALL devices
+window.toggleMessageActions = function(bubble) {
+    // Don't toggle if clicking on an action button
+    if (event.target.closest('.msg-action-btn')) return;
+    
+    const actions = bubble.querySelector('.message-actions');
+    if (!actions) return;
+    
+    // Toggle visibility
+    const isVisible = actions.style.opacity === '1';
+    
+    // Hide all others first
+    document.querySelectorAll('.message-actions').forEach(a => {
+        a.style.opacity = '0';
+        a.style.pointerEvents = 'none';
+        a.style.transform = 'translateY(10px)';
+        a.closest('.message-bubble')?.classList.remove('actions-visible');
+    });
+    
+    // Toggle current
+    if (isVisible) {
+        actions.style.opacity = '0';
+        actions.style.pointerEvents = 'none';
+        actions.style.transform = 'translateY(10px)';
+        bubble.classList.remove('actions-visible');
+    } else {
+        actions.style.opacity = '1';
+        actions.style.pointerEvents = 'auto';
+        actions.style.transform = 'translateY(0)';
+        bubble.classList.add('actions-visible');
+    }
+    event.stopPropagation();
+};
 function showToast(message, type = "info", duration = 3000) {
     const container = document.getElementById("toast-container");
     if (!container) { alert(message); return; }
@@ -15,7 +48,20 @@ function showToast(message, type = "info", duration = 3000) {
     container.appendChild(toast);
     setTimeout(() => { toast.style.opacity = "0"; setTimeout(() => toast.remove(), 300); }, duration);
 }
-
+function cancelEdit(msgId) {
+    const bubble = document.querySelector(`.message-item[data-msg-id="${msgId}"] .message-bubble`);
+    if (!bubble || !bubble.dataset.original) return;
+    
+    const input = bubble.querySelector('textarea');
+    if (!input) return;
+    
+    const textNode = document.createTextNode(bubble.dataset.original);
+    bubble.replaceChild(textNode, input);
+    delete bubble.dataset.original;
+    
+    const btnBox = bubble.querySelector('div[style*="justify-content"]');
+    if (btnBox) btnBox.remove();
+}
 // ===== SAFE FETCH =====
 async function safeFetch(url, opts = {}) {
     try {
@@ -32,6 +78,7 @@ let currentChatUser = null;
 let chatPollInterval = null;
 let smartRefresh = { friends: null, conversations: null, active: false };
 let longPressTimer = null;
+let editState = { msgId: null, originalContent: "", input: null }; // For message editing
 
 // ===== SCROLL =====
 function scrollToBottom(force = false) {
@@ -50,7 +97,7 @@ function setupScrollListener() {
     });
 }
 
-// ===== GLOBAL EMOJI CLICK HANDLER (Always ready) =====
+// ===== GLOBAL EMOJI CLICK HANDLER =====
 document.addEventListener("click", (e) => {
     if (e.target.classList.contains("emoji-opt")) {
         const picker = e.target.closest(".emoji-picker");
@@ -63,64 +110,70 @@ document.addEventListener("click", (e) => {
     }
 });
 
-// ===== LONG-PRESS DETECTION (PERSISTENT) =====
-function setupLongPress(element, onLongPress, onShortClick) {
-    let pressTimer;
-
-    const start = (e) => {
-        e.preventDefault();
-        pressTimer = setTimeout(() => {
-            onLongPress(element);
-            element.classList.add('long-press');
-            document.addEventListener('click', hideActionsOutside, { once: true });
-        }, 500);
-    };
-
-    const end = () => {
-        clearTimeout(pressTimer);
-        if (pressTimer && onShortClick) onShortClick(element);
-        pressTimer = null;
-    };
-
-    const hideActionsOutside = (e) => {
-        if (!element.contains(e.target)) {
-            element.classList.remove('long-press');
-        }
-    };
-
-    element.addEventListener('touchstart', start, { passive: false });
-    element.addEventListener('touchend', end);
-    element.addEventListener('touchcancel', end);
-    element.addEventListener('mousedown', start);
-    element.addEventListener('mouseup', end);
-    element.addEventListener('mouseleave', end);
-}
-
-// ===== MESSAGE ACTIONS =====
 function handleMessageActions(e) {
     const btn = e.target.closest(".msg-action-btn");
     if (!btn) return;
 
     const msgId = btn.dataset.id;
-    const action = btn.classList.contains("reply-btn") ? "reply" :
-        btn.classList.contains("react-btn") ? "react" : "delete";
+    const action = btn.classList.contains("reply-btn") ? "reply" : 
+                   btn.classList.contains("react-btn") ? "react" : 
+                   btn.classList.contains("edit-btn") ? "edit" : "delete";
 
     const bubble = btn.closest('.message-bubble');
     if (bubble) bubble.classList.remove('long-press');
 
+    // Block reactions on your own messages
+    if (action === "react" && btn.closest('.message-item')?.classList.contains('mine')) {
+        showToast("You can't react to your own messages", "info");
+        return;
+    }
+
     if (action === "reply") setReply(msgId);
     else if (action === "react") toggleEmojiPicker(msgId, btn);
+    // ✅ NEW (calls the function that exists):
+else if (action === "edit") {
+    const msgEl = btn.closest('.message-item');
+    const numericId = btn.dataset.numericId;
+    const content = msgEl.querySelector('.message-bubble')?.textContent?.trim() || "";
+    editMsg(msgId, numericId, content);  // ✅ Call the simple edit function
+}
     else if (action === "delete") confirmDelete(msgId, btn);
 
     e.stopPropagation();
 }
 
+// ✅ Simplified: Only handle desktop hover now
 function setupMessageInteractions() {
+    // Desktop only: Show actions on hover
     document.querySelectorAll('.message-bubble').forEach(bubble => {
-        setupLongPress(bubble, (el) => {
-            const actions = el.querySelector('.message-actions');
-            if (actions) { actions.style.opacity = '1'; actions.style.pointerEvents = 'auto'; actions.style.transform = 'translateY(0)'; }
-        }, null);
+        bubble.addEventListener('mouseenter', (e) => {
+            const actions = e.currentTarget.querySelector('.message-actions');
+            if (actions) {
+                actions.style.opacity = '1';
+                actions.style.pointerEvents = 'auto';
+                actions.style.transform = 'translateY(0)';
+            }
+        });
+        bubble.addEventListener('mouseleave', (e) => {
+            const actions = e.currentTarget.querySelector('.message-actions');
+            if (actions && !actions.matches(':hover')) {
+                actions.style.opacity = '0';
+                actions.style.pointerEvents = 'none';
+                actions.style.transform = 'translateY(10px)';
+            }
+        });
+    });
+    
+    // Close actions when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.message-bubble')) {
+            document.querySelectorAll('.message-actions').forEach(actions => {
+                actions.style.opacity = '0';
+                actions.style.pointerEvents = 'none';
+                actions.style.transform = 'translateY(10px)';
+                actions.closest('.message-bubble')?.classList.remove('actions-visible');
+            });
+        }
     });
 }
 
@@ -141,37 +194,13 @@ function setReply(msgId) {
     document.getElementById("chat-input").focus();
 }
 function cancelReply() { currentReply = null; document.getElementById("reply-preview-bar").classList.add("hidden"); }
-function handleMessageActions(e) {
-    const btn = e.target.closest(".msg-action-btn");
-    if (!btn) return;
 
-    const msgId = btn.dataset.id;
-    const action = btn.classList.contains("reply-btn") ? "reply" : 
-                   btn.classList.contains("react-btn") ? "react" : "delete";
-
-    const bubble = btn.closest('.message-bubble');
-    if (bubble) bubble.classList.remove('long-press');
-
-    // ✅ NEW: Block reactions on your own messages
-    if (action === "react" && btn.closest('.message-item')?.classList.contains('mine')) {
-        showToast("You can't react to your own messages", "info");
-        return;
-    }
-
-    if (action === "reply") setReply(msgId);
-    else if (action === "react") toggleEmojiPicker(msgId, btn);
-    else if (action === "delete") confirmDelete(msgId, btn);
-
-    e.stopPropagation();
-}
+// ===== EMOJI PICKER =====
 window.toggleEmojiPicker = function (msgId, btn) {
-    // Remove existing picker
     document.getElementById('emoji-popup')?.remove();
-
     const picker = document.createElement('div');
     picker.id = 'emoji-popup';
     
-    // Find current user reactions
     const msgItem = btn.closest('.message-item');
     const activeBadges = msgItem?.querySelectorAll('.message-reactions .react-badge.active') || [];
     const userReactions = Array.from(activeBadges).map(b => b.dataset.emoji);
@@ -181,8 +210,6 @@ window.toggleEmojiPicker = function (msgId, btn) {
         const s = document.createElement('span');
         s.className = `emoji-opt ${userReactions.includes(emoji) ? 'active' : ''}`;
         s.textContent = emoji;
-
-        // ✅ Single-fire handler (prevents mobile double-tap)
         let fired = false;
         const handle = (e) => {
             if (fired) return;
@@ -198,17 +225,12 @@ window.toggleEmojiPicker = function (msgId, btn) {
     });
 
     document.body.appendChild(picker);
-
-    // ✅ Position exactly above the clicked button
     const rect = btn.getBoundingClientRect();
     const pickerW = picker.offsetWidth;
     let left = rect.left + (rect.width / 2) - (pickerW / 2);
-    let top = rect.top - 50; // Height of picker + small gap
-
-    // Keep inside screen edges
+    let top = rect.top - 50;
     left = Math.max(6, Math.min(left, window.innerWidth - pickerW - 6));
     top = Math.max(6, top);
-
     picker.style.left = `${left}px`;
     picker.style.top = `${top}px`;
 
@@ -231,6 +253,8 @@ window.closeEmojiPickers = function () {
     if (pickers.length) console.log(`🧹 Closing ${pickers.length} open picker(s)`);
     pickers.forEach(p => p.remove());
 };
+
+// ===== REACTIONS =====
 window.selectReaction = async function (msgId, emoji) {
      if (window._reacting === msgId + emoji) return;
     window._reacting = msgId + emoji;
@@ -239,20 +263,16 @@ window.selectReaction = async function (msgId, emoji) {
     const btn = document.querySelector(`.react-btn[data-id="${msgId}"]`);
     const id = btn?.dataset.numericId;
     if (!id) return;
-
     const box = document.getElementById(`reactions-${msgId}`);
     if (!box) return;
 
-    // 1. Find user's currently active reaction
     const activeBadge = box.querySelector('.react-badge.active');
     const currentEmoji = activeBadge?.dataset.emoji;
 
-    // 2. Instant UI Update (Toggle or Switch)
     if (currentEmoji === emoji) {
-        activeBadge.remove(); // Toggle off
+        activeBadge.remove();
     } else {
-        if (activeBadge) activeBadge.remove(); // Remove old
-
+        if (activeBadge) activeBadge.remove();
         let newBadge = box.querySelector(`.react-badge[data-emoji="${emoji}"]`);
         if (!newBadge) {
             newBadge = document.createElement('span');
@@ -261,19 +281,16 @@ window.selectReaction = async function (msgId, emoji) {
             newBadge.textContent = emoji;
             box.appendChild(newBadge);
         } else {
-            newBadge.classList.add('active'); // Highlight existing
+            newBadge.classList.add('active');
         }
     }
 
-    // 3. Sync with Backend
     const token = localStorage.getItem('token');
     const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
-
     try {
         if (currentEmoji === emoji) {
             await fetch('/remove_reaction', { method: 'POST', headers, body: JSON.stringify({ message_id: id, emoji }) });
         } else if (currentEmoji) {
-            // Switch: remove old, add new
             await Promise.all([
                 fetch('/remove_reaction', { method: 'POST', headers, body: JSON.stringify({ message_id: id, emoji: currentEmoji }) }),
                 fetch('/add_reaction', { method: 'POST', headers, body: JSON.stringify({ message_id: id, emoji }) })
@@ -283,17 +300,28 @@ window.selectReaction = async function (msgId, emoji) {
         }
     } catch (err) {
         console.error("Sync error:", err);
-        // Optional: reload messages to revert UI if network fails
         if (currentChatUser) loadMessages(currentChatUser);
     }
 };
+
+
+// ===== DELETE =====
 function confirmDelete(msgId, btn) {
     document.querySelectorAll('.delete-confirm').forEach(el => el.remove());
     const confirmModal = document.createElement("div");
     confirmModal.className = "delete-confirm";
     confirmModal.innerHTML = `<p>Delete this message?</p><div class="delete-confirm-buttons"><button class="cancel-btn">Cancel</button><button class="confirm-btn">Delete</button></div>`;
     const rect = btn.getBoundingClientRect();
-    confirmModal.style.top = `${rect.top - 100}px`; confirmModal.style.left = `${rect.left}px`;
+
+    if (window.innerWidth < 600) {
+        confirmModal.style.top = `50%`; confirmModal.style.left = `50%`;
+        
+    }else{
+        confirmModal.style.top = `${rect.top - 38}px`; confirmModal.style.left = `${rect.left-160}px`;
+        confirmModal.style.textAlign = "center";
+        
+        
+    }
     document.body.appendChild(confirmModal);
     const confirmBtn = confirmModal.querySelector('.confirm-btn');
     const cancelBtn = confirmModal.querySelector('.cancel-btn');
@@ -316,7 +344,7 @@ function confirmDelete(msgId, btn) {
     };
 }
 
-// ===== LOAD MESSAGES (DIFF-BASED) =====
+// ===== LOAD MESSAGES =====
 async function loadMessages(username) {
     const token = localStorage.getItem("token");
     if (!token || !username) return;
@@ -350,16 +378,19 @@ async function loadMessages(username) {
                 }
                 reactionsHtml += '</div>';
             }
-            msgEl.innerHTML = `
-                <img src="${getSafePic(m.sender_picture)}" class="message-avatar">
-                <div class="message-wrapper">
-                    <div class="message-bubble" style="position: relative;">
+          msgEl.innerHTML = `
+    <img src="${getSafePic(m.sender_picture)}" class="message-avatar">
+    <div class="message-wrapper">
+        <div class="message-bubble" style="position: relative;" onclick="toggleMessageActions(this)">
                         ${replyHtml}
                         ${escapeHtml(m.content)}
-                        <div class="message-actions">
-    ${!m.is_mine ? `<button class="msg-action-btn react-btn" data-id="${msgId}" data-numeric-id="${m.id || ''}"><img src="emoji.png" alt="React"></button>` : ''}
-    <button class="msg-action-btn reply-btn" data-id="${msgId}" data-numeric-id="${m.id || ''}"><img src="reply.png" alt="Reply"></button>
-    ${m.is_mine ? `<button class="msg-action-btn delete-btn" data-id="${msgId}" data-numeric-id="${m.id || ''}"><img src="trash.png" alt="Delete"></button>` : ''}
+                       <div class="message-actions">
+    ${!m.is_mine ? `<button class="msg-action-btn react-btn" data-id="${msgId}" data-numeric-id="${m.id}"><img src="emoji.png"></button>` : ''}
+    <button class="msg-action-btn reply-btn" data-id="${msgId}" data-numeric-id="${m.id}"><img src="reply.png"></button>
+    ${m.is_mine ? `
+        <button class="msg-action-btn edit-btn" data-id="${msgId}" data-numeric-id="${m.id}" title="Edit" onclick="editMsg('${msgId}', '${m.id}', ${JSON.stringify(escapeHtml(m.content))})"><img src="pencil.png"></button>
+        <button class="msg-action-btn delete-btn" data-id="${msgId}" data-numeric-id="${m.id}"><img src="trash.png"></button>
+    ` : ''}
 </div>
                     </div>
                     <div id="reactions-${msgId}" class="message-reactions">${reactionsHtml}</div>
@@ -386,7 +417,6 @@ async function loadMessages(username) {
             }
             if (time && time.textContent !== newTime) time.textContent = newTime;
             const reactionsContainer = msgEl.querySelector('.message-reactions');
-
             if (reactionsContainer) {
                 let reactionsHtml = '';
                 if (m.reactions && Object.keys(m.reactions).length) {
@@ -399,12 +429,10 @@ async function loadMessages(username) {
                 }
                 reactionsContainer.innerHTML = reactionsHtml;
             }
-
         }
     });
     container.querySelectorAll('.message-item').forEach(el => { if (!processedIds.has(el.dataset.msgId)) el.remove(); });
     scrollToBottom(false);
-
 }
 
 // ===== SEND MESSAGE =====
@@ -420,7 +448,7 @@ async function sendChatMessage() {
     if (data && data.msg === "sent") { input.value = ""; cancelReply(); loadMessages(currentChatUser); setTimeout(() => loadConversationsOptimized(), 300); scrollToBottom(true); }
 }
 
-// ===== CONVERSATIONS (OPTIMIZED) =====
+// ===== CONVERSATIONS =====
 async function loadConversationsOptimized() {
     const token = localStorage.getItem("token");
     if (!token) return;
@@ -497,7 +525,7 @@ function exitChat() {
     if (window.innerWidth <= 1024) document.querySelector('.conversations-sidebar')?.classList.remove('mobile-hidden');
 }
 
-// ===== NEW CHAT MODAL =====
+// ===== MODALS & FRIENDS =====
 function openNewChatModal() { document.getElementById("new-chat-modal").showModal(); searchNewChatUsers(""); }
 function closeNewChatModal() { document.getElementById("new-chat-modal").close(); document.getElementById("new-chat-search").value = ""; }
 async function searchNewChatUsers(q) {
@@ -511,8 +539,6 @@ async function searchNewChatUsers(q) {
     const me = localStorage.getItem("username");
     users.forEach(u => { if (u.username === me) return; const item = document.createElement("div"); item.className = "modal-user-item"; item.onclick = () => { closeNewChatModal(); openChat(u.username); }; item.innerHTML = `<img src="${getSafePic(u.profile_picture)}" class="modal-user-avatar"><div class="modal-user-info"><div class="modal-user-name">${u.name || u.username}</div><div class="modal-user-username">@${u.username}</div></div>`; list.appendChild(item); });
 }
-
-// ===== FRIENDS LIST (OPTIMIZED) =====
 async function loadFriendsList() {
     const token = localStorage.getItem("token");
     if (!token) return;
@@ -549,8 +575,87 @@ function stopSmartRefresh() {
     if (smartRefresh.conversations) clearInterval(smartRefresh.conversations);
     smartRefresh.friends = null; smartRefresh.conversations = null; smartRefresh.active = false;
 }
+// ===== SIMPLE MESSAGE EDIT (BUG-FREE) =====
+function editMsg(msgId, numericId, originalContent) {
+    const bubble = document.querySelector(`.message-item[data-msg-id="${msgId}"] .message-bubble`);
+    if (!bubble || bubble.querySelector('textarea')) return; // Prevent double-open
+    
+    // Find the actual text node (ignores whitespace & action bars)
+    const textNode = Array.from(bubble.childNodes).find(n => 
+        n.nodeType === Node.TEXT_NODE && n.textContent.trim() !== ""
+    );
+    if (!textNode) return;
+    
+    // Store clean text for cancel
+    bubble.dataset.original = textNode.textContent.trim();
+    
+    // Create textarea (NO "(edited)" text inside)
+    const input = document.createElement('textarea');
+    input.value = bubble.dataset.original;
+    input.style.cssText = 'width:100%;min-height:40px;padding:8px;border-radius:12px;border:1px solid var(--border-color);background:var(--bg-tertiary);color:var(--text-primary);font:inherit;resize:vertical;outline:none;';
+    
+    bubble.replaceChild(input, textNode);
+    input.focus();
+    
+    // Safe button creation (prevents duplicate listeners)
+    const btnBox = document.createElement('div');
+    btnBox.style.cssText = 'margin-top:6px;display:flex;gap:6px;justify-content:flex-end;';
+    btnBox.innerHTML = `
+        <button class="edit-cancel" style="padding:4px 12px;border-radius:99px;border:1px solid var(--border-color);background:transparent;color:var(--text-secondary);cursor:pointer;">Cancel</button>
+        <button class="edit-save" style="padding:4px 12px;border-radius:99px;background:var(--accent);color:#000;border:none;cursor:pointer;font-weight:500;">Save</button>
+    `;
+    bubble.appendChild(btnBox);
+    
+    // Bind safely
+    btnBox.querySelector('.edit-cancel').onclick = () => cancelEdit(msgId);
+    btnBox.querySelector('.edit-save').onclick = () => saveEdit(msgId, numericId);
+}
+async function saveEdit(msgId, numericId) {
+    const bubble = document.querySelector(`.message-item[data-msg-id="${msgId}"] .message-bubble`);
+    if (!bubble) return;
+    
+    const input = bubble.querySelector('textarea');
+    if (!input) return;
+    
+    const newContent = input.value.trim();
+    if (!newContent) return showToast("Message can't be empty", "error");
+    
+    // Prevent double-clicks
+    const saveBtn = bubble.querySelector('.edit-save');
+    if (saveBtn) saveBtn.disabled = true;
+    
+    const token = localStorage.getItem("token");
+    if (!token) return window.location.href = "/root.html";
+    
+    try {
+        const res = await fetch(`/edit_message/${numericId}`, {
+            method: "PUT",
+            headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+            body: JSON.stringify({ content: newContent })
+        });
+        
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
 
-// ===== INIT =====
+        input.remove();
+        const controls = bubble.querySelector('div[style*="justify-content"]');
+        if (controls) controls.remove();
+        
+
+        Array.from(bubble.childNodes).forEach(node => {
+            if (node.nodeType === Node.TEXT_NODE) node.remove();
+        });
+
+        bubble.appendChild(document.createTextNode(newContent));
+
+        const actions = bubble.querySelector('.message-actions');
+        if (actions) bubble.appendChild(actions);
+      
+    } catch (err) {
+        console.error("Edit failed:", err);
+        showToast("Failed to save", "error");
+        cancelEdit(msgId); // Revert UI if server fails
+    }
+}
 document.addEventListener("DOMContentLoaded", async function () {
     const token = localStorage.getItem("token");
     if (!token) return window.location.href = "/root.html";
