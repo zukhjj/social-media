@@ -1,6 +1,7 @@
-import os, sys, logging, time, random, datetime, jwt, traceback, signal
+import os, sys, logging, time, random, datetime, jwt, traceback, threading
 from urllib.parse import urlparse
 from functools import wraps
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, send_from_directory, g
 from flask_cors import CORS
 from flask_caching import Cache
@@ -11,24 +12,18 @@ from psycopg2 import pool, OperationalError
 import cloudinary.uploader, cloudinary.api
 
 # ============ CONFIG ============
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static", static_url_path="")
-app.secret_key = os.environ.get("SECRET_KEY", "dev-key-change-me")
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB upload limit
+app.secret_key = os.environ.get("SECRET_KEY", "dev-key-change-me-in-production")
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max upload
 
 # Extensions
 CORS(app)
 cache = Cache(app, config={'CACHE_TYPE': 'SimpleCache', 'CACHE_DEFAULT_TIMEOUT': 60})
 Compress(app)
-limiter = Limiter(key_func=get_remote_address, app=app, 
-                  default_limits=["120 per minute", "20 per second"],
-                  storage_uri="memory://")
+limiter = Limiter(key_func=get_remote_address, app=app, default_limits=["120 per minute", "20 per second"], storage_uri="memory://")
 
 # Cloudinary
 cloudinary.config(
@@ -36,6 +31,9 @@ cloudinary.config(
     api_key=os.environ.get("CLOUDINARY_API_KEY", "239576522747935"),
     api_secret=os.environ.get("CLOUDINARY_API_SECRET", "sn4KlQ9Q-KwEqjOUxvF-MmO2ln8")
 )
+
+# Thread pool for async-like I/O (Cloudinary uploads, etc.)
+executor = ThreadPoolExecutor(max_workers=3)
 
 # ============ DATABASE POOL ============
 _db_pool = None
@@ -55,45 +53,27 @@ def init_db_pool():
             user=result.username, password=result.password,
             sslmode='require', connect_timeout=10
         )
-        logger.info("✅ DB pool initialized")
+        logger.info("✅ DB pool initialized (max 4 connections)")
         return True
     except Exception as e:
         logger.error(f"❌ Pool init failed: {e}")
         return False
 
 def get_conn(retries=2):
-    """Get DB connection with REAL error logging"""
-    if not _db_pool:
-        logger.error("❌ CRITICAL: DB pool not initialized!")
-        return None
-        
-    db_url = os.environ.get("DATABASE_URL")
-    if not db_url:
-        logger.error("❌ CRITICAL: DATABASE_URL env var is MISSING!")
-        return None
-    
+    if not _db_pool: return None
     for i in range(retries + 1):
         try:
             conn = _db_pool.getconn()
-            # Test the connection
-            cur = conn.cursor()
-            cur.execute("SELECT 1")
-            cur.close()
+            cur = conn.cursor(); cur.execute("SELECT 1"); cur.close()
             return conn
         except OperationalError as e:
-            # ⚠️ THIS IS THE KEY: Log the REAL error to Render logs
-            logger.error(f"❌ DB OperationalError (attempt {i+1}): {str(e)}")
-            logger.error(f"   URL preview: {db_url.split('@')[-1].split('/')[0] if '@' in db_url else 'invalid'}")
-            if i < retries:
-                time.sleep(0.3 * (i + 1))
-                continue
+            if i < retries: time.sleep(0.2 * (i + 1)); continue
+            logger.error(f"❌ DB connect failed: {e}")
             return None
         except Exception as e:
-            logger.error(f"❌ DB Unexpected error: {type(e).__name__}: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return None
+            logger.error(f"❌ DB error: {e}"); return None
     return None
+
 def release_conn(conn):
     if conn and _db_pool:
         try: _db_pool.putconn(conn)
@@ -127,13 +107,16 @@ def resolve_user_id(cur, user_val):
     return row[0] if row else None
 
 def update_last_seen(user_id):
-    try:
-        conn = get_conn()
-        if not conn: return
-        cur = conn.cursor()
-        cur.execute("UPDATE users SET last_seen = NOW() WHERE id = %s", (user_id,))
-        conn.commit(); cur.close(); release_conn(conn)
-    except: pass
+    def _update():
+        try:
+            conn = get_conn()
+            if not conn: return
+            cur = conn.cursor()
+            cur.execute("UPDATE users SET last_seen = NOW() WHERE id = %s", (user_id,))
+            conn.commit(); cur.close(); release_conn(conn)
+        except: pass
+    # Run in background thread to not block response
+    executor.submit(_update)
 
 def extract_public_id(url):
     if not url or "cloudinary" not in url: return None
@@ -153,6 +136,10 @@ def delete_asset(url, rtype="image"):
         return True
     except: return False
 
+def async_cloudinary_upload(file):
+    """Run Cloudinary upload in thread pool"""
+    return cloudinary.uploader.upload(file)
+
 # ============ ROUTES: Static ============
 @app.route("/")
 def root(): return send_from_directory("static", "root.html")
@@ -168,29 +155,18 @@ def serve_messages(): return send_from_directory("static", "messages.html")
 @app.route("/health")
 @limiter.exempt
 def health():
-    """Health check that actually verifies DB connection"""
     try:
-        # Check env var first
-        if not os.environ.get("DATABASE_URL"):
-            logger.error("❌ Health check failed: DATABASE_URL not set")
-            return jsonify({"status": "unhealthy", "error": "missing_db_url"}), 503
-            
-        # Try to get a connection
+        if not os.environ.get("DATABASE_URL"): return jsonify({"status": "unhealthy", "error": "missing_db_url"}), 503
         conn = get_conn()
-        if not conn:
-            logger.error("❌ Health check failed: get_conn() returned None")
-            return jsonify({"status": "unhealthy", "error": "db_connection_failed"}), 503
-            
-        # Test query
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        cur.close()
+        if not conn: return jsonify({"status": "unhealthy", "error": "db_connection_failed"}), 503
+        cur = conn.cursor(); cur.execute("SELECT 1"); cur.close()
         release_conn(conn)
-        
         return jsonify({"status": "healthy", "ts": datetime.datetime.utcnow().isoformat()})
     except Exception as e:
-        logger.error(f"❌ Health check exception: {type(e).__name__}: {str(e)}")
+        logger.error(f"Health fail: {e}")
         return jsonify({"status": "unhealthy", "error": str(e)}), 503
+
+# ============ ROUTES: Auth ============
 @app.route("/api/verify", methods=["GET"])
 @token_required
 def verify_token():
@@ -206,7 +182,6 @@ def signup():
     phone = data.get("phone", "").strip() if data.get("phone") else None
     password = data.get("password", "")
     if not email and not phone: return jsonify({"msg": "need_email_or_phone"}), 400
-    
     conn = get_conn()
     if not conn: return jsonify({"msg": "db_error"}), 503
     cur = conn.cursor()
@@ -217,18 +192,14 @@ def signup():
         if phone:
             cur.execute("SELECT 1 FROM users WHERE phone=%s", (phone,))
             if cur.fetchone(): return jsonify({"msg": "phone_used"}), 409
-        
         for _ in range(10):
             username = name.lower().replace(" ", "") + str(random.randint(1000, 9999))
             cur.execute("SELECT 1 FROM users WHERE username=%s", (username,))
             if not cur.fetchone(): break
         else: return jsonify({"msg": "username_failed"}), 500
-        
-        cur.execute("INSERT INTO users (name,email,phone,username,password) VALUES (%s,%s,%s,%s,%s)",
-                   (name, email, phone, username, password))
+        cur.execute("INSERT INTO users (name,email,phone,username,password) VALUES (%s,%s,%s,%s,%s)", (name, email, phone, username, password))
         conn.commit()
-        token = jwt.encode({"user": username, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
-                          app.secret_key, algorithm="HS256")
+        token = jwt.encode({"user": username, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)}, app.secret_key, algorithm="HS256")
         return jsonify({"msg": "created", "username": username, "token": token, "profile_picture": "unknown"})
     except Exception as e:
         conn.rollback(); logger.error(f"Signup: {e}")
@@ -243,19 +214,16 @@ def login():
     phone = data.get("phone", "").strip() if data.get("phone") else None
     password = data.get("password", "")
     if not email and not phone: return jsonify({"msg": "email_or_phone_required"}), 400
-    
     conn = get_conn()
     if not conn: return jsonify({"msg": "db_error"}), 503
     cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM users WHERE email=%s" if email else "SELECT * FROM users WHERE phone=%s",
-                   (email or phone,))
+        cur.execute("SELECT * FROM users WHERE email=%s" if email else "SELECT * FROM users WHERE phone=%s", (email or phone,))
         user = cur.fetchone()
         if not user: return jsonify({"msg": "not_found"}), 401
         if user[5] != password: return jsonify({"msg": "wrong_password"}), 401
         pic = user[6] if len(user) > 6 else "unknown"
-        token = jwt.encode({"user_id": user[0], "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
-                          app.secret_key, algorithm="HS256")
+        token = jwt.encode({"user_id": user[0], "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)}, app.secret_key, algorithm="HS256")
         return jsonify({"msg": "success", "token": token, "profile_picture": pic})
     finally: cur.close(); release_conn(conn)
 
@@ -267,7 +235,6 @@ def google_login():
     name = data.get("name", "").strip()
     picture = data.get("picture") or "unknown"
     if not email or not name: return jsonify({"msg": "email_and_name_required"}), 400
-    
     conn = get_conn()
     if not conn: return jsonify({"msg": "db_error"}), 503
     cur = conn.cursor()
@@ -285,11 +252,9 @@ def google_login():
                 cur.execute("SELECT 1 FROM users WHERE username=%s", (username,))
                 if not cur.fetchone(): break
             else: return jsonify({"msg": "username_failed"}), 500
-            cur.execute("INSERT INTO users (name,email,username,password,profile_picture) VALUES (%s,%s,%s,%s,%s)",
-                       (name, email, username, "google_auth", picture))
+            cur.execute("INSERT INTO users (name,email,username,password,profile_picture) VALUES (%s,%s,%s,%s,%s)", (name, email, username, "google_auth", picture))
             conn.commit()
-        token = jwt.encode({"user": username, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
-                          app.secret_key, algorithm="HS256")
+        token = jwt.encode({"user": username, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)}, app.secret_key, algorithm="HS256")
         return jsonify({"msg": "success", "token": token, "username": username, "profile_picture": picture})
     except Exception as e:
         conn.rollback(); logger.error(f"Google login: {e}")
@@ -310,8 +275,7 @@ def add_post():
     try:
         user_id = resolve_user_id(cur, g.user_id)
         if not user_id: return jsonify({"msg": "user_not_found"}), 404
-        cur.execute("INSERT INTO posts (user_id,content,image,video) VALUES (%s,%s,%s,%s)",
-                   (user_id, content, image_url, video_url))
+        cur.execute("INSERT INTO posts (user_id,content,image,video) VALUES (%s,%s,%s,%s)", (user_id, content, image_url, video_url))
         conn.commit()
         cache.delete_memoized(get_posts)
         return jsonify({"msg": "post_created"})
@@ -335,8 +299,7 @@ def get_posts():
             SELECT p.id,p.content,p.image,p.video,p.like_count,p.comment_count,p.repost_count,u.username,u.profile_picture
             FROM posts p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC LIMIT %s OFFSET %s
         """, (per_page, offset))
-        return jsonify([{"id":r[0],"content":r[1],"image":r[2],"video":r[3],"likes":r[4],"comments":r[5],
-                        "reposts":r[6],"username":r[7],"profile_picture":r[8]} for r in cur.fetchall()])
+        return jsonify([{"id":r[0],"content":r[1],"image":r[2],"video":r[3],"likes":r[4],"comments":r[5],"reposts":r[6],"username":r[7],"profile_picture":r[8]} for r in cur.fetchall()])
     finally: cur.close(); release_conn(conn)
 
 @app.route("/like_post", methods=["POST"])
@@ -404,8 +367,9 @@ def delete_post(post_id):
         owner_id, img, vid = row
         user_id = resolve_user_id(cur, g.user_id)
         if not user_id or user_id != owner_id: return jsonify({"msg": "unauthorized"}), 403
-        if img: delete_asset(img, "image")
-        if vid: delete_asset(vid, "video")
+        # Delete from Cloudinary in background
+        if img: executor.submit(delete_asset, img, "image")
+        if vid: executor.submit(delete_asset, vid, "video")
         cur.execute("DELETE FROM posts WHERE id=%s", (post_id,))
         conn.commit(); cache.delete_memoized(get_posts)
         return jsonify({"msg": "deleted"})
@@ -432,9 +396,11 @@ def edit_post(post_id):
         if not user_id or user_id != owner_id: return jsonify({"msg": "unauthorized"}), 403
         new_img = old_img
         if image and image.filename:
-            res = cloudinary.uploader.upload(image)
+            # Upload in thread pool
+            future = executor.submit(async_cloudinary_upload, image)
+            res = future.result()
             new_img = res["secure_url"]
-            if old_img and "unknown" not in old_img: delete_asset(old_img, "image")
+            if old_img and "unknown" not in old_img: executor.submit(delete_asset, old_img, "image")
         cur.execute("UPDATE posts SET content=%s,image=%s WHERE id=%s", (content, new_img, post_id))
         conn.commit(); cache.delete_memoized(get_posts)
         return jsonify({"msg": "updated"})
@@ -508,8 +474,7 @@ def delete_comment(comment_id):
 @limiter.limit("20 per minute")
 def follow():
     target = request.json.get("username")
-    if not target or target == (g.user_data.get("user") or g.user_data.get("user_id")):
-        return jsonify({"msg": "invalid_target"}), 400
+    if not target or target == (g.user_data.get("user") or g.user_data.get("user_id")): return jsonify({"msg": "invalid_target"}), 400
     conn = get_conn()
     if not conn: return jsonify({"msg": "db_error"}), 503
     cur = conn.cursor()
@@ -640,8 +605,7 @@ def update_profile():
         if new_phone != old_phone: updates.append("phone=%s"); params.append(new_phone)
         if new_pic != old_pic: updates.append("profile_picture=%s"); params.append(new_pic)
         if new_pw:
-            if not old_pw or (old_pass != old_pw and "google_auth" not in old_pass):
-                return jsonify({"msg": "old_password_incorrect"}), 400
+            if not old_pw or (old_pass != old_pw and "google_auth" not in old_pass): return jsonify({"msg": "old_password_incorrect"}), 400
             if len(new_pw) < 6: return jsonify({"msg": "password_too_short"}), 400
             updates.append("password=%s"); params.append(new_pw)
         if updates:
@@ -670,10 +634,8 @@ def get_user_profile(username):
             SELECT p.id,p.content,p.image,p.video,p.like_count,p.comment_count,p.repost_count,p.created_at,u.username,u.profile_picture
             FROM posts p JOIN users u ON p.user_id=u.id WHERE p.user_id=%s ORDER BY p.created_at DESC LIMIT 50
         """, (user[0],))
-        posts = [{"id":p[0],"content":p[1],"image":p[2],"video":p[3],"likes":p[4],"comments":p[5],
-                 "reposts":p[6],"created_at":str(p[7]),"username":p[8],"profile_picture":p[9]} for p in cur.fetchall()]
-        return jsonify({"id":user[0],"username":user[1],"name":user[2],"profile_picture":user[3],
-                       "followers":followers,"following":following,"posts":posts})
+        posts = [{"id":p[0],"content":p[1],"image":p[2],"video":p[3],"likes":p[4],"comments":p[5],"reposts":p[6],"created_at":str(p[7]),"username":p[8],"profile_picture":p[9]} for p in cur.fetchall()]
+        return jsonify({"id":user[0],"username":user[1],"name":user[2],"profile_picture":user[3],"followers":followers,"following":following,"posts":posts})
     finally: cur.close(); release_conn(conn)
 
 # ============ ROUTES: Messages ============
@@ -740,8 +702,7 @@ def get_conversations():
                 WHERE (sender_id=%s AND receiver_id=%s) OR (sender_id=%s AND receiver_id=%s) ORDER BY created_at DESC LIMIT 1""",
                 (user_id, other_id, other_id, user_id))
             lm = cur.fetchone()
-            if u: convs.append({"user_id":other_id,"username":u[0],"name":u[1],"profile_picture":u[2],
-                               "last_message_time":str(last_time),"last_message":lm[0] if lm else "",
+            if u: convs.append({"user_id":other_id,"username":u[0],"name":u[1],"profile_picture":u[2],"last_message_time":str(last_time),"last_message":lm[0] if lm else "",
                                "last_message_from_me":lm[1]==user_id if lm else False,"unread_count":unread})
         return jsonify(convs)
     finally: cur.close(); release_conn(conn)
@@ -806,8 +767,7 @@ def send_message():
         if not row: return jsonify({"msg": "user_not_found"}), 404
         receiver_id = row[0]
         reply_to = request.json.get("reply_to_id")
-        cur.execute("INSERT INTO messages (sender_id,receiver_id,content,reply_to_id) VALUES (%s,%s,%s,%s)",
-                   (sender_id, receiver_id, content, reply_to))
+        cur.execute("INSERT INTO messages (sender_id,receiver_id,content,reply_to_id) VALUES (%s,%s,%s,%s)", (sender_id, receiver_id, content, reply_to))
         conn.commit()
         cache.delete_memoized(get_conversations)
         cache.delete_memoized(get_messages, other_username=receiver)
@@ -853,8 +813,7 @@ def add_reaction():
         cur.execute("SELECT sender_id FROM messages WHERE id=%s", (message_id,))
         row = cur.fetchone()
         if row and row[0] == user_id: return jsonify({"msg": "cannot_react_own"}), 400
-        cur.execute("INSERT INTO message_reactions (message_id,user_id,emoji) VALUES (%s,%s,%s)",
-                   (message_id, user_id, emoji))
+        cur.execute("INSERT INTO message_reactions (message_id,user_id,emoji) VALUES (%s,%s,%s)", (message_id, user_id, emoji))
         conn.commit()
         return jsonify({"msg": "reaction_added"})
     except Exception as e:
@@ -876,8 +835,7 @@ def remove_reaction():
     try:
         user_id = resolve_user_id(cur, g.user_id)
         if not user_id: return jsonify({"msg": "user_not_found"}), 404
-        cur.execute("DELETE FROM message_reactions WHERE message_id=%s AND user_id=%s AND emoji=%s",
-                   (message_id, user_id, emoji))
+        cur.execute("DELETE FROM message_reactions WHERE message_id=%s AND user_id=%s AND emoji=%s", (message_id, user_id, emoji))
         conn.commit()
         return jsonify({"msg": "reaction_removed"})
     except Exception as e:
@@ -927,20 +885,14 @@ def init_db():
         conn.rollback(); logger.error(f"DB init: {e}"); return False
     finally: cur.close(); release_conn(conn)
 
-# ============ STARTUP ============
-def on_starting(server):
-    init_db_pool()
-    init_db()
-
-def when_ready(server):
-    logger.info("🚀 App ready - optimized for concurrency")
-
-# Gunicorn hooks
-on_starting = on_starting
-when_ready = when_ready
+# ============ STARTUP (RUNS ON IMPORT FOR RENDER) ============
+# ✅ This runs when app.py is imported (by Render), not just when run as main
 init_db_pool()
 init_db()
+logger.info("🚀 App loaded - optimized for concurrency")
+
 if __name__ == "__main__":
-   
-    # Local dev only - use Gunicorn in production
-    app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    # Local dev only
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"🎧 Starting Flask dev server on port {port}")
+    app.run(debug=False, host="0.0.0.0", port=port)
