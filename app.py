@@ -62,20 +62,38 @@ def init_db_pool():
         return False
 
 def get_conn(retries=2):
-    if not _db_pool: return None
+    """Get DB connection with REAL error logging"""
+    if not _db_pool:
+        logger.error("❌ CRITICAL: DB pool not initialized!")
+        return None
+        
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        logger.error("❌ CRITICAL: DATABASE_URL env var is MISSING!")
+        return None
+    
     for i in range(retries + 1):
         try:
             conn = _db_pool.getconn()
-            cur = conn.cursor(); cur.execute("SELECT 1"); cur.close()
+            # Test the connection
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.close()
             return conn
         except OperationalError as e:
-            if i < retries: time.sleep(0.2 * (i + 1)); continue
-            logger.error(f"❌ DB connect failed: {e}")
+            # ⚠️ THIS IS THE KEY: Log the REAL error to Render logs
+            logger.error(f"❌ DB OperationalError (attempt {i+1}): {str(e)}")
+            logger.error(f"   URL preview: {db_url.split('@')[-1].split('/')[0] if '@' in db_url else 'invalid'}")
+            if i < retries:
+                time.sleep(0.3 * (i + 1))
+                continue
             return None
         except Exception as e:
-            logger.error(f"❌ DB error: {e}"); return None
+            logger.error(f"❌ DB Unexpected error: {type(e).__name__}: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
     return None
-
 def release_conn(conn):
     if conn and _db_pool:
         try: _db_pool.putconn(conn)
@@ -150,17 +168,29 @@ def serve_messages(): return send_from_directory("static", "messages.html")
 @app.route("/health")
 @limiter.exempt
 def health():
+    """Health check that actually verifies DB connection"""
     try:
+        # Check env var first
+        if not os.environ.get("DATABASE_URL"):
+            logger.error("❌ Health check failed: DATABASE_URL not set")
+            return jsonify({"status": "unhealthy", "error": "missing_db_url"}), 503
+            
+        # Try to get a connection
         conn = get_conn()
-        if not conn: return jsonify({"status": "unhealthy", "error": "db"}), 503
-        cur = conn.cursor(); cur.execute("SELECT 1"); cur.close()
+        if not conn:
+            logger.error("❌ Health check failed: get_conn() returned None")
+            return jsonify({"status": "unhealthy", "error": "db_connection_failed"}), 503
+            
+        # Test query
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close()
         release_conn(conn)
+        
         return jsonify({"status": "healthy", "ts": datetime.datetime.utcnow().isoformat()})
     except Exception as e:
-        logger.error(f"Health fail: {e}")
+        logger.error(f"❌ Health check exception: {type(e).__name__}: {str(e)}")
         return jsonify({"status": "unhealthy", "error": str(e)}), 503
-
-# ============ ROUTES: Auth ============
 @app.route("/api/verify", methods=["GET"])
 @token_required
 def verify_token():
@@ -896,91 +926,7 @@ def init_db():
     except Exception as e:
         conn.rollback(); logger.error(f"DB init: {e}"); return False
     finally: cur.close(); release_conn(conn)
-@app.route("/debug/db-error", methods=["GET"])
-def debug_db_error():
-    """🔍 TEMPORARY DEBUG ENDPOINT - REMOVE BEFORE PRODUCTION"""
-    import sys, traceback, psycopg2
-    from urllib.parse import urlparse
-    
-    result = {
-        "🔍 DEBUG REPORT": "Database Connection Diagnostic",
-        "⚠️ WARNING": "REMOVE THIS ENDPOINT BEFORE PRODUCTION",
-        "env": {},
-        "connection": {},
-        "tables": {},
-        "error": None
-    }
-    
-    # 1. Check environment variables
-    result["env"]["DATABASE_URL_set"] = bool(os.environ.get("DATABASE_URL"))
-    result["env"]["DATABASE_URL_preview"] = "SET (hidden)" if os.environ.get("DATABASE_URL") else "MISSING ❌"
-    result["env"]["SECRET_KEY_set"] = bool(os.environ.get("SECRET_KEY"))
-    result["env"]["Render"] = os.environ.get("RENDER", "false")
-    
-    # 2. Try to connect and capture exact error
-    try:
-        db_url = os.environ.get("DATABASE_URL")
-        if not db_url:
-            result["connection"]["status"] = "FAILED"
-            result["error"] = "DATABASE_URL environment variable is NOT set"
-        else:
-            result["connection"]["url_preview"] = db_url.split("@")[-1].split("/")[0] + "/***" if "@" in db_url else "invalid_format"
-            
-            try:
-                parsed = urlparse(db_url)
-                conn = psycopg2.connect(
-                    host=parsed.hostname,
-                    port=parsed.port or 5432,
-                    database=parsed.path.lstrip('/'),
-                    user=parsed.username,
-                    password=parsed.password,
-                    sslmode='require',
-                    connect_timeout=10
-                )
-                result["connection"]["status"] = "SUCCESS ✅"
-                
-                # 3. If connected, check tables
-                cur = conn.cursor()
-                cur.execute("SELECT version()")
-                result["tables"]["postgres_version"] = cur.fetchone()[0][:60]
-                
-                cur.execute("""
-                    SELECT table_name FROM information_schema.tables 
-                    WHERE table_schema = 'public' ORDER BY table_name
-                """)
-                result["tables"]["existing_tables"] = [r[0] for r in cur.fetchall()]
-                
-                # Check critical tables
-                for tbl in ["users", "posts", "messages"]:
-                    cur.execute(f"SELECT COUNT(*) FROM {tbl}")
-                    result["tables"][f"{tbl}_count"] = cur.fetchone()[0]
-                
-                cur.close()
-                conn.close()
-                
-            except psycopg2.OperationalError as e:
-                result["connection"]["status"] = "OPERATIONAL ERROR"
-                result["error"] = str(e)
-                result["connection"]["error_type"] = "psycopg2.OperationalError"
-            except psycopg2.ProgrammingError as e:
-                result["connection"]["status"] = "PROGRAMMING ERROR"
-                result["error"] = str(e)
-                result["connection"]["error_type"] = "psycopg2.ProgrammingError"
-            except psycopg2.InterfaceError as e:
-                result["connection"]["status"] = "INTERFACE ERROR"
-                result["error"] = str(e)
-                result["connection"]["error_type"] = "psycopg2.InterfaceError"
-            except Exception as e:
-                result["connection"]["status"] = "UNKNOWN ERROR"
-                result["error"] = str(e)
-                result["connection"]["error_type"] = type(e).__name__
-                result["connection"]["traceback"] = traceback.format_exc()
-                
-    except Exception as e:
-        result["error"] = f"Debug endpoint failed: {str(e)}"
-        result["traceback"] = traceback.format_exc()
-    
-    return jsonify(result)
+
 # ============ STARTUP ============
 def on_starting(server):
     init_db_pool()
