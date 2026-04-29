@@ -938,9 +938,9 @@ def when_ready(server):
 # Gunicorn hooks
 on_starting = on_starting
 when_ready = when_ready
-
+init_db_pool()
+init_db()
 if __name__ == "__main__":
-    init_db_pool()
-    init_db()
+   
     # Local dev only - use Gunicorn in production
     app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
