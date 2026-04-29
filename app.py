@@ -896,7 +896,91 @@ def init_db():
     except Exception as e:
         conn.rollback(); logger.error(f"DB init: {e}"); return False
     finally: cur.close(); release_conn(conn)
-
+@app.route("/debug/db-error", methods=["GET"])
+def debug_db_error():
+    """🔍 TEMPORARY DEBUG ENDPOINT - REMOVE BEFORE PRODUCTION"""
+    import sys, traceback, psycopg2
+    from urllib.parse import urlparse
+    
+    result = {
+        "🔍 DEBUG REPORT": "Database Connection Diagnostic",
+        "⚠️ WARNING": "REMOVE THIS ENDPOINT BEFORE PRODUCTION",
+        "env": {},
+        "connection": {},
+        "tables": {},
+        "error": None
+    }
+    
+    # 1. Check environment variables
+    result["env"]["DATABASE_URL_set"] = bool(os.environ.get("DATABASE_URL"))
+    result["env"]["DATABASE_URL_preview"] = "SET (hidden)" if os.environ.get("DATABASE_URL") else "MISSING ❌"
+    result["env"]["SECRET_KEY_set"] = bool(os.environ.get("SECRET_KEY"))
+    result["env"]["Render"] = os.environ.get("RENDER", "false")
+    
+    # 2. Try to connect and capture exact error
+    try:
+        db_url = os.environ.get("DATABASE_URL")
+        if not db_url:
+            result["connection"]["status"] = "FAILED"
+            result["error"] = "DATABASE_URL environment variable is NOT set"
+        else:
+            result["connection"]["url_preview"] = db_url.split("@")[-1].split("/")[0] + "/***" if "@" in db_url else "invalid_format"
+            
+            try:
+                parsed = urlparse(db_url)
+                conn = psycopg2.connect(
+                    host=parsed.hostname,
+                    port=parsed.port or 5432,
+                    database=parsed.path.lstrip('/'),
+                    user=parsed.username,
+                    password=parsed.password,
+                    sslmode='require',
+                    connect_timeout=10
+                )
+                result["connection"]["status"] = "SUCCESS ✅"
+                
+                # 3. If connected, check tables
+                cur = conn.cursor()
+                cur.execute("SELECT version()")
+                result["tables"]["postgres_version"] = cur.fetchone()[0][:60]
+                
+                cur.execute("""
+                    SELECT table_name FROM information_schema.tables 
+                    WHERE table_schema = 'public' ORDER BY table_name
+                """)
+                result["tables"]["existing_tables"] = [r[0] for r in cur.fetchall()]
+                
+                # Check critical tables
+                for tbl in ["users", "posts", "messages"]:
+                    cur.execute(f"SELECT COUNT(*) FROM {tbl}")
+                    result["tables"][f"{tbl}_count"] = cur.fetchone()[0]
+                
+                cur.close()
+                conn.close()
+                
+            except psycopg2.OperationalError as e:
+                result["connection"]["status"] = "OPERATIONAL ERROR"
+                result["error"] = str(e)
+                result["connection"]["error_type"] = "psycopg2.OperationalError"
+            except psycopg2.ProgrammingError as e:
+                result["connection"]["status"] = "PROGRAMMING ERROR"
+                result["error"] = str(e)
+                result["connection"]["error_type"] = "psycopg2.ProgrammingError"
+            except psycopg2.InterfaceError as e:
+                result["connection"]["status"] = "INTERFACE ERROR"
+                result["error"] = str(e)
+                result["connection"]["error_type"] = "psycopg2.InterfaceError"
+            except Exception as e:
+                result["connection"]["status"] = "UNKNOWN ERROR"
+                result["error"] = str(e)
+                result["connection"]["error_type"] = type(e).__name__
+                result["connection"]["traceback"] = traceback.format_exc()
+                
+    except Exception as e:
+        result["error"] = f"Debug endpoint failed: {str(e)}"
+        result["traceback"] = traceback.format_exc()
+    
+    return jsonify(result)
 # ============ STARTUP ============
 def on_starting(server):
     init_db_pool()
