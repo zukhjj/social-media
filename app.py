@@ -58,7 +58,125 @@ def init_db_pool():
         logger.error(f"❌ DB pool init failed: {e}")
 
 def get_conn():
-    return db_pool.getconn() if db_pool else None
+    """Neon-compatible DB connection"""
+    try:
+        from urllib.parse import urlparse
+        import psycopg2
+        
+        db_url = os.environ.get("DATABASE_URL")
+        if not db_url:
+            logger.error("❌ DATABASE_URL environment variable is not set!")
+            return None
+        
+        result = urlparse(db_url)
+        
+        conn = psycopg2.connect(
+            host=result.hostname,
+            port=result.port or 5432,
+            database=result.path.lstrip('/'),
+            user=result.username,
+            password=result.password,
+            sslmode='require',
+            connect_timeout=10
+        )
+        return conn
+    except Exception as e:
+        logger.error(f"❌ Failed to connect to database: {e}")
+        return None
+
+def release_conn(conn):
+    if conn:
+        try:
+            conn.close()
+        except:
+            pass
+def release_conn(conn):
+    """Just close the connection (no pool to return to)"""
+    if conn:
+        try:
+            conn.close()
+        except:
+            pass
+def init_db():
+    conn = get_conn()
+    if not conn:
+        logger.error("❌ CRITICAL: Cannot connect to DB for initialization")
+        return False
+    cursor = conn.cursor()
+    try:
+        # Check if users table exists first
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'users'
+            );
+        """)
+        tables_exist = cursor.fetchone()[0]
+        
+        if not tables_exist:
+            logger.info("📦 Creating database tables...")
+            cursor.execute("""
+                CREATE TABLE users (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT,
+                    email TEXT UNIQUE,
+                    phone TEXT UNIQUE,
+                    username TEXT UNIQUE,
+                    password TEXT,
+                    profile_picture TEXT DEFAULT 'unknown',
+                    last_seen TIMESTAMP DEFAULT NOW()
+                );
+                -- ... add all your other CREATE TABLE statements here ...
+            """)
+            conn.commit()
+            logger.info("✅ Tables created successfully")
+        else:
+            logger.info("✅ Tables already exist")
+        
+        # Verify a critical table
+        cursor.execute("SELECT COUNT(*) FROM users")
+        user_count = cursor.fetchone()[0]
+        logger.info(f"📊 Users table has {user_count} records")
+        
+        return True
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"❌ DB init ERROR: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return False
+    finally:
+        cursor.close()
+        release_conn(conn)
+@app.route("/debug/db")
+def debug_db():
+    """Temporary debug endpoint - REMOVE IN PRODUCTION"""
+    result = {"env_vars": {}, "connection": None, "tables": None}
+    
+    # Check env vars
+    result["env_vars"]["DATABASE_URL"] = "SET" if os.environ.get("DATABASE_URL") else "MISSING"
+    result["env_vars"]["SECRET_KEY"] = "SET" if os.environ.get("SECRET_KEY") else "MISSING"
+    
+    # Try connection
+    try:
+        conn = get_conn()
+        if conn:
+            result["connection"] = "SUCCESS"
+            cur = conn.cursor()
+            cur.execute("SELECT version()")
+            result["db_version"] = cur.fetchone()[0][:50]
+            cur.execute("SELECT COUNT(*) FROM users")
+            result["user_count"] = cur.fetchone()[0]
+            cur.close()
+            release_conn(conn)
+        else:
+            result["connection"] = "FAILED - get_conn() returned None"
+    except Exception as e:
+        result["connection"] = f"ERROR: {str(e)}"
+        import traceback
+        result["traceback"] = traceback.format_exc()
+    
+    return jsonify(result)
 
 def release_conn(conn):
     if conn and db_pool:
@@ -1273,100 +1391,6 @@ def edit_message(message_id):
         cur.close()
         release_conn(conn)
 
-# Initialize DB and tables
-def init_db():
-    conn = get_conn()
-    if not conn:
-        logger.error("❌ Cannot connect to DB for init")
-        return
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                name TEXT,
-                email TEXT UNIQUE,
-                phone TEXT UNIQUE,
-                username TEXT UNIQUE,
-                password TEXT,
-                profile_picture TEXT DEFAULT 'unknown',
-                last_seen TIMESTAMP DEFAULT NOW()
-            );
-            CREATE TABLE IF NOT EXISTS posts (
-                id SERIAL PRIMARY KEY,
-                user_id INT REFERENCES users(id) ON DELETE CASCADE,
-                content TEXT,
-                image TEXT,
-                video TEXT,
-                created_at TIMESTAMP DEFAULT NOW(),
-                like_count INT DEFAULT 0,
-                comment_count INT DEFAULT 0,
-                repost_count INT DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS likes (
-                id SERIAL PRIMARY KEY,
-                user_id INT REFERENCES users(id) ON DELETE CASCADE,
-                post_id INT REFERENCES posts(id) ON DELETE CASCADE,
-                created_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(user_id, post_id)
-            );
-            CREATE TABLE IF NOT EXISTS follows (
-                id SERIAL PRIMARY KEY,
-                follower_id INT REFERENCES users(id) ON DELETE CASCADE,
-                following_id INT REFERENCES users(id) ON DELETE CASCADE,
-                created_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(follower_id, following_id)
-            );
-            CREATE TABLE IF NOT EXISTS comments (
-                id SERIAL PRIMARY KEY,
-                post_id INT REFERENCES posts(id) ON DELETE CASCADE,
-                user_id INT REFERENCES users(id) ON DELETE CASCADE,
-                content TEXT,
-                created_at TIMESTAMP DEFAULT NOW()
-            );
-            CREATE TABLE IF NOT EXISTS reposts (
-                id SERIAL PRIMARY KEY,
-                user_id INT REFERENCES users(id) ON DELETE CASCADE,
-                post_id INT REFERENCES posts(id) ON DELETE CASCADE,
-                created_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(user_id, post_id)
-            );
-            CREATE TABLE IF NOT EXISTS messages (
-                id SERIAL PRIMARY KEY,
-                sender_id INT REFERENCES users(id) ON DELETE CASCADE,
-                receiver_id INT REFERENCES users(id) ON DELETE CASCADE,
-                content TEXT,
-                created_at TIMESTAMP DEFAULT NOW(),
-                is_read BOOLEAN DEFAULT FALSE,
-                reply_to_id INT REFERENCES messages(id) ON DELETE SET NULL
-            );
-            CREATE TABLE IF NOT EXISTS message_reactions (
-                id SERIAL PRIMARY KEY,
-                message_id INT REFERENCES messages(id) ON DELETE CASCADE,
-                user_id INT REFERENCES users(id) ON DELETE CASCADE,
-                emoji TEXT,
-                created_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(message_id, user_id, emoji)
-            );
-            -- Indexes for performance
-            CREATE INDEX IF NOT EXISTS idx_posts_user_id ON posts(user_id);
-            CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_likes_post_id ON likes(post_id);
-            CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
-            CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
-            CREATE INDEX IF NOT EXISTS idx_messages_users ON messages(sender_id, receiver_id);
-            CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-            CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-        """)
-        conn.commit()
-        logger.info("✅ Database tables initialized")
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"❌ DB init error: {e}")
-    finally:
-        cursor.close()
-        release_conn(conn)
 
 if __name__ == "__main__":
     init_db_pool()
