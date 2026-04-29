@@ -1,8 +1,8 @@
 Flask
 flask-cors
-flask-caching
-flask-compress
+Flask-Caching
+Flask-Compress
+Flask-Limiter
 psycopg2-binary
 PyJWT
 cloudinary
-gunicorn
