@@ -78,10 +78,28 @@
 </div>
                 <div id="messages-container" class="messages-container"></div>
                 <button id="scroll-bottom-btn" class="scroll-bottom-btn" onclick="scrollToBottom(true)">⬇</button>  
-                <div class="chat-input-wrap">
-                    <input type="text" id="chat-input" class="chat-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendChatMessage()">
-                    <button class="chat-send-btn" onclick="sendChatMessage()">➤</button>
-                </div>
+                <!-- ✅ NEW: Hidden file input -->
+<input type="file" id="media-input" class="hidden" 
+       accept="image/*,video/*,.pdf,.doc,.docx" 
+       onchange="handleMediaSelect(event)">
+
+<div class="chat-input-wrap">
+    <!-- ✅ NEW: Attach button -->
+    <button class="chat-attach-btn" onclick="document.getElementById('media-input').click()" title="Attach file"><img src="send.png" width="20px" alt=""></button>
+    
+    <input type="text" id="chat-input" class="chat-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendChatMessage()">
+    <button class="chat-send-btn" onclick="sendChatMessage()">➤</button>
+</div>
+
+<!-- ✅ NEW: Preview container (hidden by default) -->
+<div id="media-preview" class="media-preview hidden">
+    <div id="preview-content"></div>
+    <button class="remove-preview" onclick="clearMediaPreview()">✕</button>
+    <div id="upload-progress" class="upload-progress hidden">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <span class="progress-text">0%</span>
+    </div>
+</div>
             </div>
         </section>
     </main>
