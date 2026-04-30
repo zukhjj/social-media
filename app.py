@@ -11,52 +11,33 @@ from flask_limiter.util import get_remote_address
 from psycopg2 import pool, OperationalError
 import cloudinary.uploader, cloudinary.api
 
-# ============ CONFIG ============
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 app.secret_key = "c10fc560f0a1f805a854f9992a6d955de3d53dee0a395e0273aefea8e8b32518"
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 CORS(app)
 cache = Cache(app, config={'CACHE_TYPE': 'SimpleCache', 'CACHE_DEFAULT_TIMEOUT': 60})
 Compress(app)
-limiter = Limiter(
-    key_func=get_remote_address, app=app,
-    default_limits=["120 per minute", "20 per second"],
-    storage_uri="memory://"
-)
+limiter = Limiter(key_func=get_remote_address, app=app, default_limits=["120 per minute", "20 per second"], storage_uri="memory://")
 
-cloudinary.config(
-    cloud_name="dlimysibj",
-    api_key="239576522747935",
-    api_secret="sn4KlQ9Q-KwEqjOUxvF-MmO2ln8"
-)
+cloudinary.config(cloud_name="dlimysibj", api_key="239576522747935", api_secret="sn4KlQ9Q-KwEqjOUxvF-MmO2ln8")
 
-# Use only 1 worker to stay within free tier limits
 executor = ThreadPoolExecutor(max_workers=2)
 
-# ============ DB POOL (small for free tier) ============
 _db_pool = None
 _last_seen_lock = threading.Lock()
-_last_seen_cache = {}  # user_id -> last update timestamp (throttle)
+_last_seen_cache = {}
 
 def init_db_pool():
     global _db_pool
     try:
         db_url = "postgresql://neondb_owner:npg_UATC3pfibMd6@ep-cold-cake-abnyap5j-pooler.eu-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
         result = urlparse(db_url)
-        _db_pool = pool.ThreadedConnectionPool(
-            minconn=1, maxconn=3,  # Free tier: keep low
-            host=result.hostname, port=result.port or 5432,
-            database=result.path.lstrip('/'),
-            user=result.username, password=result.password,
-            sslmode='require', connect_timeout=15,
-            keepalives=1, keepalives_idle=30,
-            keepalives_interval=10, keepalives_count=3
-        )
-        logger.info("✅ DB pool ready (max 3)")
+        _db_pool = pool.ThreadedConnectionPool(minconn=1, maxconn=6, host=result.hostname, port=result.port or 5432, database=result.path.lstrip('/'), user=result.username, password=result.password, sslmode='require', connect_timeout=10, keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3)
+        logger.info("✅ DB pool ready (max 6)")
         return True
     except Exception as e:
         logger.error(f"❌ Pool init failed: {e}")
@@ -67,7 +48,6 @@ def get_conn(retries=3):
     for i in range(retries + 1):
         try:
             conn = _db_pool.getconn()
-            # Validate connection is alive
             if conn.closed:
                 try: _db_pool.putconn(conn)
                 except: pass
@@ -95,7 +75,6 @@ def release_conn(conn):
             try: conn.close()
             except: pass
 
-# ============ HELPERS ============
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -120,7 +99,6 @@ def token_required(f):
     return decorated
 
 def resolve_user_id(cur, user_val):
-    """Resolve username or int to user id."""
     if isinstance(user_val, int):
         return user_val
     try:
@@ -133,14 +111,12 @@ def resolve_user_id(cur, user_val):
     return row[0] if row else None
 
 def update_last_seen(user_id):
-    """Throttled last_seen update — max once per 20 seconds per user."""
     now = time.time()
     with _last_seen_lock:
         last = _last_seen_cache.get(user_id, 0)
         if now - last < 20:
             return
         _last_seen_cache[user_id] = now
-
     def _update():
         conn = get_conn()
         if not conn: return
@@ -153,11 +129,9 @@ def update_last_seen(user_id):
             pass
         finally:
             release_conn(conn)
-
     executor.submit(_update)
 
 def user_cache_key(prefix, user_id, *extra):
-    """Build a user-specific cache key."""
     parts = [prefix, str(user_id)] + [str(e) for e in extra]
     return ":".join(parts)
 
@@ -181,7 +155,6 @@ def delete_asset_bg(url, rtype="image"):
     except:
         pass
 
-# ============ STATIC ROUTES ============
 @app.route("/")
 def root(): return send_from_directory("static", "root.html")
 
@@ -209,7 +182,6 @@ def health():
     release_conn(conn)
     return jsonify({"status": "healthy", "ts": datetime.datetime.utcnow().isoformat()})
 
-# ============ AUTH ============
 @app.route("/api/verify", methods=["GET"])
 @token_required
 def verify_token():
@@ -245,15 +217,9 @@ def signup():
                 break
         if not username:
             return jsonify({"msg": "username_failed"}), 500
-        cur.execute(
-            "INSERT INTO users (name,email,phone,username,password) VALUES (%s,%s,%s,%s,%s)",
-            (name, email, phone, username, password)
-        )
+        cur.execute("INSERT INTO users (name,email,phone,username,password) VALUES (%s,%s,%s,%s,%s)", (name, email, phone, username, password))
         conn.commit()
-        token = jwt.encode(
-            {"user": username, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
-            app.secret_key, algorithm="HS256"
-        )
+        token = jwt.encode({"user": username, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)}, app.secret_key, algorithm="HS256")
         return jsonify({"msg": "created", "username": username, "token": token, "profile_picture": "unknown"})
     except Exception as e:
         conn.rollback()
@@ -283,10 +249,7 @@ def login():
         if not user: return jsonify({"msg": "not_found"}), 401
         uid, uname, stored_pw, pic = user
         if stored_pw != password: return jsonify({"msg": "wrong_password"}), 401
-        token = jwt.encode(
-            {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
-            app.secret_key, algorithm="HS256"
-        )
+        token = jwt.encode({"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)}, app.secret_key, algorithm="HS256")
         return jsonify({"msg": "success", "token": token, "profile_picture": pic or "unknown"})
     finally:
         cur.close(); release_conn(conn)
@@ -321,15 +284,9 @@ def google_login():
                     break
             if not username:
                 return jsonify({"msg": "username_failed"}), 500
-            cur.execute(
-                "INSERT INTO users (name,email,username,password,profile_picture) VALUES (%s,%s,%s,%s,%s)",
-                (name, email, username, "google_auth", picture)
-            )
+            cur.execute("INSERT INTO users (name,email,username,password,profile_picture) VALUES (%s,%s,%s,%s,%s)", (name, email, username, "google_auth", picture))
             conn.commit()
-        token = jwt.encode(
-            {"user": username, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
-            app.secret_key, algorithm="HS256"
-        )
+        token = jwt.encode({"user": username, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)}, app.secret_key, algorithm="HS256")
         return jsonify({"msg": "success", "token": token, "username": username, "profile_picture": picture})
     except Exception as e:
         conn.rollback(); logger.error(f"Google login: {e}")
@@ -337,7 +294,6 @@ def google_login():
     finally:
         cur.close(); release_conn(conn)
 
-# ============ POSTS ============
 @app.route("/add_post", methods=["POST"])
 @token_required
 @limiter.limit("30 per minute")
@@ -351,10 +307,7 @@ def add_post():
     try:
         user_id = resolve_user_id(cur, g.user_id)
         if not user_id: return jsonify({"msg": "user_not_found"}), 404
-        cur.execute(
-            "INSERT INTO posts (user_id,content,image,video) VALUES (%s,%s,%s,%s)",
-            (user_id, content, image_url, video_url)
-        )
+        cur.execute("INSERT INTO posts (user_id,content,image,video) VALUES (%s,%s,%s,%s)", (user_id, content, image_url, video_url))
         conn.commit()
         cache.delete("posts:feed:1")
         return jsonify({"msg": "post_created"})
@@ -377,17 +330,8 @@ def get_posts():
     if not conn: return jsonify([]), 503
     cur = conn.cursor()
     try:
-        cur.execute("""
-            SELECT p.id,p.content,p.image,p.video,p.like_count,p.comment_count,
-                   p.repost_count,u.username,u.profile_picture
-            FROM posts p JOIN users u ON u.id=p.user_id
-            ORDER BY p.created_at DESC LIMIT %s OFFSET %s
-        """, (per_page, offset))
-        result = [
-            {"id":r[0],"content":r[1],"image":r[2],"video":r[3],"likes":r[4],
-             "comments":r[5],"reposts":r[6],"username":r[7],"profile_picture":r[8]}
-            for r in cur.fetchall()
-        ]
+        cur.execute("SELECT p.id,p.content,p.image,p.video,p.like_count,p.comment_count,p.repost_count,u.username,u.profile_picture FROM posts p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC LIMIT %s OFFSET %s", (per_page, offset))
+        result = [{"id":r[0],"content":r[1],"image":r[2],"video":r[3],"likes":r[4],"comments":r[5],"reposts":r[6],"username":r[7],"profile_picture":r[8]} for r in cur.fetchall()]
         cache.set(ck, result, timeout=30)
         return jsonify(result)
     finally:
@@ -508,7 +452,6 @@ def edit_post(post_id):
     finally:
         cur.close(); release_conn(conn)
 
-# ============ COMMENTS ============
 @app.route("/get_comments/<int:post_id>", methods=["GET"])
 def get_comments(post_id):
     ck = f"comments:{post_id}"
@@ -518,15 +461,8 @@ def get_comments(post_id):
     if not conn: return jsonify([]), 503
     cur = conn.cursor()
     try:
-        cur.execute("""
-            SELECT c.id,c.content,c.created_at,u.username,u.name,u.profile_picture
-            FROM comments c JOIN users u ON c.user_id=u.id
-            WHERE c.post_id=%s ORDER BY c.created_at ASC LIMIT 100
-        """, (post_id,))
-        result = [
-            {"id":r[0],"content":r[1],"created_at":str(r[2]),"username":r[3],"name":r[4],"profile_picture":r[5]}
-            for r in cur.fetchall()
-        ]
+        cur.execute("SELECT c.id,c.content,c.created_at,u.username,u.name,u.profile_picture FROM comments c JOIN users u ON c.user_id=u.id WHERE c.post_id=%s ORDER BY c.created_at ASC LIMIT 100", (post_id,))
+        result = [{"id":r[0],"content":r[1],"created_at":str(r[2]),"username":r[3],"name":r[4],"profile_picture":r[5]} for r in cur.fetchall()]
         cache.set(ck, result, timeout=60)
         return jsonify(result)
     finally:
@@ -610,7 +546,6 @@ def edit_comment(comment_id):
     finally:
         cur.close(); release_conn(conn)
 
-# ============ FOLLOWS ============
 @app.route("/follow", methods=["POST"])
 @token_required
 @limiter.limit("20 per minute")
@@ -659,19 +594,10 @@ def get_friends():
         user_id = resolve_user_id(cur, g.user_id)
         if not user_id: return jsonify({"msg": "user_not_found"}), 404
         update_last_seen(user_id)
-
         ck = user_cache_key("friends", user_id)
         cached = cache.get(ck)
         if cached: return jsonify(cached)
-
-        cur.execute("""
-            SELECT u.id,u.username,u.name,u.profile_picture,
-                   CASE WHEN u.last_seen > NOW() - INTERVAL '30 seconds' THEN true ELSE false END
-            FROM users u
-            WHERE u.id != %s
-              AND EXISTS (SELECT 1 FROM follows f1 WHERE f1.follower_id=%s AND f1.following_id=u.id)
-              AND EXISTS (SELECT 1 FROM follows f2 WHERE f2.follower_id=u.id AND f2.following_id=%s)
-        """, (user_id, user_id, user_id))
+        cur.execute("SELECT u.id,u.username,u.name,u.profile_picture,CASE WHEN u.last_seen > NOW() - INTERVAL '30 seconds' THEN true ELSE false END FROM users u WHERE u.id != %s AND EXISTS (SELECT 1 FROM follows f1 WHERE f1.follower_id=%s AND f1.following_id=u.id) AND EXISTS (SELECT 1 FROM follows f2 WHERE f2.follower_id=u.id AND f2.following_id=%s)", (user_id, user_id, user_id))
         result = [{"id":r[0],"username":r[1],"name":r[2],"profile_picture":r[3],"is_online":r[4]} for r in cur.fetchall()]
         cache.set(ck, result, timeout=30)
         return jsonify(result)
@@ -687,17 +613,10 @@ def get_my_follows():
     try:
         user_id = resolve_user_id(cur, g.user_id)
         if not user_id: return jsonify({"msg": "user_not_found"}), 404
-
         ck = user_cache_key("my_follows", user_id)
         cached = cache.get(ck)
         if cached: return jsonify(cached)
-
-        cur.execute("""
-            SELECT u.username,
-                   EXISTS (SELECT 1 FROM follows f2 WHERE f2.follower_id=u.id AND f2.following_id=%s) as is_mutual
-            FROM users u JOIN follows f ON f.following_id=u.id
-            WHERE f.follower_id=%s
-        """, (user_id, user_id))
+        cur.execute("SELECT u.username,EXISTS (SELECT 1 FROM follows f2 WHERE f2.follower_id=u.id AND f2.following_id=%s) as is_mutual FROM users u JOIN follows f ON f.following_id=u.id WHERE f.follower_id=%s", (user_id, user_id))
         following, friends = [], []
         for uname, is_mutual in cur.fetchall():
             (friends if is_mutual else following).append(uname)
@@ -707,7 +626,6 @@ def get_my_follows():
     finally:
         cur.close(); release_conn(conn)
 
-# ============ PROFILE ============
 @app.route("/get_my_info", methods=["GET"])
 @token_required
 def get_my_info():
@@ -719,7 +637,6 @@ def get_my_info():
         ck = user_cache_key("my_info", user_id or str(g.user_id))
         cached = cache.get(ck)
         if cached: return jsonify(cached)
-
         if isinstance(g.user_id, int):
             cur.execute("SELECT username,name,email,phone,profile_picture FROM users WHERE id=%s", (g.user_id,))
         else:
@@ -747,14 +664,12 @@ def update_profile():
         user = cur.fetchone()
         if not user: return jsonify({"msg": "user_not_found"}), 404
         uid, old_name, old_email, old_phone, old_user, old_pass, old_pic = user
-
         new_name = request.form.get("name", "").strip() or old_name
         new_user = request.form.get("username", "").strip() or old_user
         new_email = request.form.get("email", "").strip() or None
         new_phone = request.form.get("phone", "").strip() or None
         old_pw = request.form.get("old_password", "").strip()
         new_pw = request.form.get("new_password", "").strip()
-
         if new_user != old_user:
             cur.execute("SELECT 1 FROM users WHERE username=%s AND id!=%s", (new_user, uid))
             if cur.fetchone(): return jsonify({"msg": "username_taken"}), 409
@@ -764,7 +679,6 @@ def update_profile():
         if new_phone and new_phone != old_phone:
             cur.execute("SELECT 1 FROM users WHERE phone=%s AND id!=%s", (new_phone, uid))
             if cur.fetchone(): return jsonify({"msg": "phone_used"}), 409
-
         new_pic = old_pic
         img = request.files.get("profile_image")
         if img and img.filename:
@@ -772,7 +686,6 @@ def update_profile():
             new_pic = res["secure_url"]
             if old_pic and "unknown" not in old_pic:
                 executor.submit(delete_asset_bg, old_pic, "image")
-
         updates, params = [], []
         if new_name != old_name: updates.append("name=%s"); params.append(new_name)
         if new_user != old_user: updates.append("username=%s"); params.append(new_user)
@@ -785,13 +698,10 @@ def update_profile():
             if len(new_pw) < 6:
                 return jsonify({"msg": "password_too_short"}), 400
             updates.append("password=%s"); params.append(new_pw)
-
         if updates:
             params.append(uid)
             cur.execute(f"UPDATE users SET {', '.join(updates)} WHERE id=%s", params)
             conn.commit()
-
-        # Invalidate user caches
         cache.delete(user_cache_key("my_info", uid))
         return jsonify({"msg": "updated", "username": new_user, "profile_picture": new_pic, "name": new_name})
     except Exception as e:
@@ -817,25 +727,14 @@ def get_user_profile(username):
         followers = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM follows WHERE follower_id=%s", (uid,))
         following = cur.fetchone()[0]
-        cur.execute("""
-            SELECT p.id,p.content,p.image,p.video,p.like_count,p.comment_count,p.repost_count,
-                   p.created_at,u.username,u.profile_picture
-            FROM posts p JOIN users u ON p.user_id=u.id
-            WHERE p.user_id=%s ORDER BY p.created_at DESC LIMIT 50
-        """, (uid,))
-        posts = [
-            {"id":p[0],"content":p[1],"image":p[2],"video":p[3],"likes":p[4],"comments":p[5],
-             "reposts":p[6],"created_at":str(p[7]),"username":p[8],"profile_picture":p[9]}
-            for p in cur.fetchall()
-        ]
-        result = {"id":user[0],"username":user[1],"name":user[2],"profile_picture":user[3],
-                  "followers":followers,"following":following,"posts":posts}
+        cur.execute("SELECT p.id,p.content,p.image,p.video,p.like_count,p.comment_count,p.repost_count,p.created_at,u.username,u.profile_picture FROM posts p JOIN users u ON p.user_id=u.id WHERE p.user_id=%s ORDER BY p.created_at DESC LIMIT 50", (uid,))
+        posts = [{"id":p[0],"content":p[1],"image":p[2],"video":p[3],"likes":p[4],"comments":p[5],"reposts":p[6],"created_at":str(p[7]),"username":p[8],"profile_picture":p[9]} for p in cur.fetchall()]
+        result = {"id":user[0],"username":user[1],"name":user[2],"profile_picture":user[3],"followers":followers,"following":following,"posts":posts}
         cache.set(ck, result, timeout=60)
         return jsonify(result)
     finally:
         cur.close(); release_conn(conn)
 
-# ============ MESSAGES ============
 @app.route("/search_users", methods=["GET"])
 @token_required
 def search_users():
@@ -848,11 +747,7 @@ def search_users():
     cur = conn.cursor()
     try:
         if query:
-            cur.execute("""
-                SELECT username,name,profile_picture FROM users
-                WHERE username ILIKE %s OR name ILIKE %s
-                ORDER BY username LIMIT 20
-            """, (f"%{query}%", f"%{query}%"))
+            cur.execute("SELECT username,name,profile_picture FROM users WHERE username ILIKE %s OR name ILIKE %s ORDER BY username LIMIT 20", (f"%{query}%", f"%{query}%"))
         else:
             cur.execute("SELECT username,name,profile_picture FROM users ORDER BY username LIMIT 20")
         result = [{"username":r[0],"name":r[1],"profile_picture":r[2]} for r in cur.fetchall()]
@@ -871,20 +766,10 @@ def get_friends_list():
         user_id = resolve_user_id(cur, g.user_id)
         if not user_id: return jsonify({"msg": "user_not_found"}), 404
         update_last_seen(user_id)
-
         ck = user_cache_key("friends_list", user_id)
         cached = cache.get(ck)
         if cached: return jsonify(cached)
-
-        cur.execute("""
-            SELECT u.id,u.username,u.name,u.profile_picture,
-                   CASE WHEN u.last_seen > NOW() - INTERVAL '60 seconds' THEN true ELSE false END
-            FROM users u
-            WHERE u.id != %s
-              AND EXISTS (SELECT 1 FROM follows f1 WHERE f1.follower_id=%s AND f1.following_id=u.id)
-              AND EXISTS (SELECT 1 FROM follows f2 WHERE f2.follower_id=u.id AND f2.following_id=%s)
-            ORDER BY u.last_seen DESC
-        """, (user_id, user_id, user_id))
+        cur.execute("SELECT u.id,u.username,u.name,u.profile_picture,CASE WHEN u.last_seen > NOW() - INTERVAL '60 seconds' THEN true ELSE false END FROM users u WHERE u.id != %s AND EXISTS (SELECT 1 FROM follows f1 WHERE f1.follower_id=%s AND f1.following_id=u.id) AND EXISTS (SELECT 1 FROM follows f2 WHERE f2.follower_id=u.id AND f2.following_id=%s) ORDER BY u.last_seen DESC", (user_id, user_id, user_id))
         result = [{"id":r[0],"username":r[1],"name":r[2],"profile_picture":r[3],"is_online":r[4]} for r in cur.fetchall()]
         cache.set(ck, result, timeout=20)
         return jsonify(result)
@@ -901,52 +786,40 @@ def get_conversations():
         user_id = resolve_user_id(cur, g.user_id)
         if not user_id: return jsonify({"msg": "user_not_found"}), 404
         update_last_seen(user_id)
-
+        
         ck = user_cache_key("conversations", user_id)
         cached = cache.get(ck)
         if cached: return jsonify(cached)
-
-        # FIXED: Single query instead of N+1 loop
+        
         cur.execute("""
             WITH conv AS (
-                SELECT
-                    CASE WHEN sender_id=%s THEN receiver_id ELSE sender_id END AS other_id,
-                    MAX(created_at) AS last_time,
-                    COUNT(CASE WHEN receiver_id=%s AND is_read=FALSE THEN 1 END) AS unread_count
-                FROM messages
-                WHERE sender_id=%s OR receiver_id=%s
-                GROUP BY other_id
-                ORDER BY last_time DESC
-                LIMIT 50
+                SELECT CASE WHEN sender_id=%s THEN receiver_id ELSE sender_id END AS other_id,
+                       MAX(created_at) AS last_time,
+                       COUNT(CASE WHEN receiver_id=%s AND is_read=FALSE THEN 1 END) AS unread_count
+                FROM messages WHERE sender_id=%s OR receiver_id=%s 
+                GROUP BY other_id ORDER BY last_time DESC LIMIT 50
             ),
             last_msgs AS (
-                SELECT DISTINCT ON (
-                    CASE WHEN sender_id=%s THEN receiver_id ELSE sender_id END
-                )
-                    CASE WHEN sender_id=%s THEN receiver_id ELSE sender_id END AS other_id,
-                    content,
-                    sender_id,
-                    created_at
-                FROM messages
-                WHERE sender_id=%s OR receiver_id=%s
+                SELECT DISTINCT ON (CASE WHEN sender_id=%s THEN receiver_id ELSE sender_id END)
+                       CASE WHEN sender_id=%s THEN receiver_id ELSE sender_id END AS other_id,
+                       content, sender_id, created_at
+                FROM messages WHERE sender_id=%s OR receiver_id=%s 
                 ORDER BY other_id, created_at DESC
             )
-            SELECT
-                c.other_id,
-                u.username, u.name, u.profile_picture,
-                c.last_time,
-                c.unread_count,
-                lm.content,
-                lm.sender_id
+            SELECT c.other_id, u.username, u.name, u.profile_picture, c.last_time, c.unread_count, 
+                   lm.content, lm.sender_id,
+                   CASE WHEN u.last_seen > NOW() - INTERVAL '30 seconds' THEN TRUE ELSE FALSE END AS is_online
             FROM conv c
             JOIN users u ON u.id = c.other_id
             LEFT JOIN last_msgs lm ON lm.other_id = c.other_id
             ORDER BY c.last_time DESC
         """, (user_id, user_id, user_id, user_id, user_id, user_id, user_id, user_id))
-
+        
         convs = []
         for row in cur.fetchall():
-            other_id, uname, name, pic, last_time, unread, last_content, last_sender = row
+            # ✅ FIX: Unpack ALL 9 columns (added is_online at the end)
+            other_id, uname, name, pic, last_time, unread, last_content, last_sender, is_online = row
+            
             convs.append({
                 "user_id": other_id,
                 "username": uname,
@@ -955,9 +828,10 @@ def get_conversations():
                 "last_message_time": str(last_time),
                 "last_message": last_content or "",
                 "last_message_from_me": last_sender == user_id,
-                "unread_count": unread
+                "unread_count": unread,
+                "is_online": bool(is_online)  # ✅ FIX: Properly defined & sent to frontend
             })
-
+            
         cache.set(ck, convs, timeout=15)
         return jsonify(convs)
     except Exception as e:
@@ -965,7 +839,6 @@ def get_conversations():
         return jsonify([]), 500
     finally:
         cur.close(); release_conn(conn)
-
 @app.route("/get_messages/<string:other_username>", methods=["GET"])
 @token_required
 def get_messages(other_username):
@@ -976,57 +849,23 @@ def get_messages(other_username):
         user_id = resolve_user_id(cur, g.user_id)
         if not user_id: return jsonify({"msg": "user_not_found"}), 404
         update_last_seen(user_id)
-
         cur.execute("SELECT id,profile_picture FROM users WHERE username=%s", (other_username,))
         other = cur.fetchone()
         if not other: return jsonify({"msg": "user_not_found"}), 404
         other_id, other_pic = other
-
-        # Mark messages as read
-        cur.execute("""
-            UPDATE messages SET is_read=TRUE
-            WHERE sender_id=%s AND receiver_id=%s AND is_read=FALSE
-        """, (other_id, user_id))
+        cur.execute("UPDATE messages SET is_read=TRUE WHERE sender_id=%s AND receiver_id=%s AND is_read=FALSE", (other_id, user_id))
         conn.commit()
-
-        # Invalidate conversation cache for this user (unread count changed)
         cache.delete(user_cache_key("conversations", user_id))
-
-        # Fetch messages with reply context in one query
-        cur.execute("""
-            SELECT m.id, m.content, m.created_at, m.sender_id, m.reply_to_id,
-                   u.username, u.profile_picture,
-                   r.id, r.content, r.sender_id, ru.username,
-                   m.is_edited
-            FROM messages m
-            JOIN users u ON m.sender_id = u.id
-            LEFT JOIN messages r ON m.reply_to_id = r.id
-            LEFT JOIN users ru ON r.sender_id = ru.id
-            WHERE (m.sender_id=%s AND m.receiver_id=%s)
-               OR (m.sender_id=%s AND m.receiver_id=%s)
-            ORDER BY m.created_at ASC
-            LIMIT 100
-        """, (user_id, other_id, other_id, user_id))
+        cur.execute("SELECT m.id, m.content, m.created_at, m.sender_id, m.reply_to_id,u.username, u.profile_picture,r.id, r.content, r.sender_id, ru.username,m.is_edited,m.media_url, m.media_type, m.media_name, m.media_size, m.media_thumbnail,m.hidden_by, m.deleted_status FROM messages m JOIN users u ON m.sender_id = u.id LEFT JOIN messages r ON m.reply_to_id = r.id LEFT JOIN users ru ON r.sender_id = ru.id WHERE (m.sender_id=%s AND m.receiver_id=%s)OR (m.sender_id=%s AND m.receiver_id=%s)AND m.deleted_status != 'deleted_everyone'AND NOT %s = ANY(COALESCE(m.hidden_by, '{}'))ORDER BY m.created_at ASC LIMIT 100", (user_id, other_id, other_id, user_id, user_id))
         rows = cur.fetchall()
-
         if not rows:
             return jsonify({"messages": [], "other_user_picture": other_pic})
-
-        # FIXED: Batch-fetch ALL reactions in one query instead of per-message
         msg_ids = [r[0] for r in rows]
-        cur.execute("""
-            SELECT message_id, emoji, user_id
-            FROM message_reactions
-            WHERE message_id = ANY(%s)
-        """, (msg_ids,))
-        reactions_raw = cur.fetchall()
-
-        # Group reactions by message_id
+        cur.execute("SELECT message_id, emoji, user_id FROM message_reactions WHERE message_id = ANY(%s)", (msg_ids,))
         from collections import defaultdict
         reactions_by_msg = defaultdict(list)
-        for msg_id, emoji, react_uid in reactions_raw:
+        for msg_id, emoji, react_uid in cur.fetchall():
             reactions_by_msg[msg_id].append((emoji, react_uid))
-
         msgs = []
         for row in rows:
             mid = row[0]
@@ -1037,25 +876,7 @@ def get_messages(other_username):
                 counts[emoji] = counts.get(emoji, 0) + 1
                 if react_uid == user_id:
                     user_reacts.append(emoji)
-
-            msgs.append({
-                "id": mid,
-                "content": row[1],
-                "created_at": str(row[2]),
-                "sender_id": row[3],
-                "reply_to_id": row[4],
-                "sender_username": row[5],
-                "sender_picture": row[6],
-                "is_mine": row[3] == user_id,
-                "reply_context": {
-                    "id": row[7], "content": row[8],
-                    "sender_id": row[9], "sender_username": row[10]
-                } if row[7] else None,
-                "reactions": counts,
-                "user_reactions": user_reacts,
-                "is_edited": row[11] if len(row) > 11 else False
-            })
-
+            msgs.append({"id": mid,"content": row[1],"created_at": str(row[2]),"sender_id": row[3],"reply_to_id": row[4],"sender_username": row[5],"sender_picture": row[6],"is_mine": row[3] == user_id,"reply_context": {"id": row[7], "content": row[8],"sender_id": row[9], "sender_username": row[10]} if row[7] else None,"reactions": counts,"user_reactions": user_reacts,"is_edited": row[11] if len(row) > 11 else False,"media_url": row[12],"media_type": row[13],"media_name": row[14],"media_size": row[15],"media_thumbnail": row[16],"hidden_by": row[17] or [],"deleted_status": row[18] or "active"})
         return jsonify({"messages": msgs, "other_user_picture": other_pic})
     except Exception as e:
         logger.error(f"Get messages: {e}")
@@ -1083,12 +904,8 @@ def send_message():
         if not row: return jsonify({"msg": "user_not_found"}), 404
         receiver_id = row[0]
         reply_to = data.get("reply_to_id")
-        cur.execute(
-            "INSERT INTO messages (sender_id,receiver_id,content,reply_to_id) VALUES (%s,%s,%s,%s)",
-            (sender_id, receiver_id, content, reply_to)
-        )
+        cur.execute("INSERT INTO messages (sender_id,receiver_id,content,reply_to_id) VALUES (%s,%s,%s,%s)", (sender_id, receiver_id, content, reply_to))
         conn.commit()
-        # Invalidate both sides' conversation caches
         cache.delete(user_cache_key("conversations", sender_id))
         cache.delete(user_cache_key("conversations", receiver_id))
         return jsonify({"msg": "sent"})
@@ -1097,61 +914,286 @@ def send_message():
         return jsonify({"msg": "error"}), 500
     finally:
         cur.close(); release_conn(conn)
-
-@app.route("/delete_message/<int:message_id>", methods=["DELETE"])
+@app.route("/send_media_message", methods=["POST"])
+@token_required
+@limiter.limit("10 per minute")
+def send_media_message():
+    if 'media' not in request.files:
+        return jsonify({"msg": "no_media"}), 400
+    
+    receiver = request.form.get("receiver_username")
+    content = request.form.get("content", "").strip()
+    media_file = request.files['media']
+    reply_to_id = request.form.get("reply_to_id", type=int)
+    
+    if not receiver or media_file.filename == '':
+        return jsonify({"msg": "missing_fields"}), 400
+    
+    # Allowed MIME types
+    ALLOWED_TYPES = {
+        'image': ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+        'video': ['video/mp4', 'video/webm'],
+        'file': [  # ✅ Documents & other files
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'text/plain',
+            'application/zip',
+            'application/x-rar-compressed',
+            'application/x-7z-compressed'
+        ]
+    }
+    
+    MAX_SIZES = {
+        'image': 10*1024*1024,    # 10MB
+        'video': 25*1024*1024,    # 25MB
+        'file': 15*1024*1024      # 15MB for docs
+    }
+    
+    mime = media_file.content_type
+    media_type = None
+    
+    # Determine media type
+    for t, mimes in ALLOWED_TYPES.items():
+        if mime in mimes:
+            media_type = t
+            break
+    
+    if not media_type:
+        return jsonify({"msg": "invalid_media_type"}), 400
+    
+    # Check file size
+    if media_file.content_length and media_file.content_length > MAX_SIZES.get(media_type, 10*1024*1024):
+        return jsonify({"msg": "file_too_large"}), 400
+    
+    conn = get_conn()
+    if not conn:
+        return jsonify({"msg": "db_error"}), 503
+    
+    cur = conn.cursor()
+    try:
+        # Resolve sender & receiver IDs
+        sid = resolve_user_id(cur, g.user_id)
+        if not sid:
+            return jsonify({"msg": "user_not_found"}), 404
+        
+        cur.execute("SELECT id FROM users WHERE username=%s", (receiver,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"msg": "user_not_found"}), 404
+        rid = row[0]
+        
+        # ✅ Cloudinary upload parameters - FIXED for documents
+        upload_params = {
+            'folder': 'socialgrid/media',
+            'use_filename': True,
+            'unique_filename': True,
+            'overwrite': False,
+        }
+        
+        if media_type == 'image':
+            upload_params.update({
+                'transformation': [
+                    {'width': 1920, 'height': 1920, 'crop': 'limit'},
+                    {'quality': 'auto:good'},
+                    {'fetch_format': 'auto'}
+                ]
+            })
+        elif media_type == 'video':
+            upload_params.update({
+                'resource_type': 'video',
+                'transformation': [
+                    {'width': 1280, 'height': 720, 'crop': 'limit'},
+                    {'video_codec': 'auto'},
+                    {'quality': 'auto:good'}
+                ]
+            })
+        elif media_type == 'file':  # ✅ CRITICAL FIX: raw resource type for PDFs/docs
+            upload_params.update({
+                'resource_type': 'raw'  # Cloudinary requires this for non-media files
+            })
+        
+        # Upload to Cloudinary
+        upload_result = cloudinary.uploader.upload(media_file, **upload_params)
+        
+        # Generate thumbnail for images only
+        thumbnail = None
+        if media_type == 'image':
+            try:
+                thumbnail = cloudinary.utils.cloudinary_url(
+                    upload_result['public_id'],
+                    transformation=[{'width': 150, 'height': 150, 'crop': 'thumb', 'quality': 'auto'}]
+                )[0]
+            except:
+                thumbnail = upload_result['secure_url']
+        
+        # Prepare values for DB insert
+        content_value = content if content else ""
+        reply_to_value = reply_to_id if reply_to_id else None
+        
+        # Insert message into database
+        cur.execute("""
+            INSERT INTO messages (
+                sender_id, receiver_id, content, reply_to_id,
+                media_url, media_type, media_name, media_size, media_thumbnail
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            sid, rid, content_value, reply_to_value,
+            upload_result['secure_url'], media_type,
+            media_file.filename, media_file.content_length or 0, thumbnail
+        ))
+        
+        conn.commit()
+        logger.info(f"✅ Media message inserted, ID={cur.lastrowid}, type={media_type}")
+        
+        # Invalidate conversation caches
+        try:
+            cache.delete(user_cache_key("conversations", sid))
+            cache.delete(user_cache_key("conversations", rid))
+        except Exception as cache_err:
+            logger.warning(f"⚠️ Cache invalidation warning: {cache_err}")
+        
+        return jsonify({
+            "msg": "sent",
+            "media_url": upload_result['secure_url'],
+            "media_type": media_type,
+            "thumbnail": thumbnail
+        }), 200
+        
+    except Exception as e:
+        conn.rollback()
+        error_msg = str(e)
+        
+        # Log specific errors for debugging
+        if "null value in column" in error_msg and "content" in error_msg:
+            logger.critical("🔴 DB ERROR: content column cannot be NULL")
+        elif "column" in error_msg and "does not exist" in error_msg:
+            logger.critical("🔴 DB ERROR: Missing column in messages table")
+        elif "resource type" in error_msg.lower() or "raw" in error_msg.lower():
+            logger.critical("🔴 Cloudinary ERROR: Missing resource_type='raw' for document")
+        
+        logger.error(f"❌ send_media_message FAILED: {type(e).__name__}: {error_msg}")
+        return jsonify({"msg": "upload_failed", "error": "server_error"}), 500
+        
+    finally:
+        cur.close()
+        release_conn(conn)
+@app.route("/delete_message/<string:message_id>", methods=["POST"])
 @token_required
 def delete_message(message_id):
     conn = get_conn()
     if not conn: return jsonify({"msg": "db_error"}), 503
     cur = conn.cursor()
     try:
-        sender_id = resolve_user_id(cur, g.user_id)
-        if not sender_id: return jsonify({"msg": "user_not_found"}), 404
-        cur.execute("SELECT sender_id, receiver_id FROM messages WHERE id=%s", (message_id,))
+        uid = resolve_user_id(cur, g.user_id)
+        if not uid: return jsonify({"msg": "user_not_found"}), 404
+        
+        # Parse ID: "id-79" -> 79
+        try:
+            numeric_id = int(str(message_id).replace("id-", ""))
+        except (ValueError, AttributeError):
+            return jsonify({"msg": "invalid_message_id"}), 400
+        
+
+        cur.execute("SELECT sender_id, receiver_id, media_url, media_type FROM messages WHERE id=%s", (numeric_id,))
         row = cur.fetchone()
         if not row: return jsonify({"msg": "not_found"}), 404
-        if row[0] != sender_id: return jsonify({"msg": "unauthorized"}), 403
-        cur.execute("DELETE FROM messages WHERE id=%s", (message_id,))
+
+        sender_id = int(row[0])
+        receiver_id = int(row[1])
+        media_url, media_type = row[2], row[3]
+        
+      
+        if int(uid) not in [sender_id, receiver_id]:
+            return jsonify({"msg": "unauthorized"}), 403
+        
+        data = request.json or {}
+        delete_scope = data.get("delete_for", "me")
+        
+        if delete_scope == "everyone":
+          
+            if sender_id != int(uid):
+                return jsonify({"msg": "only_sender_can_delete_for_everyone"}), 403
+            
+      
+            if media_url and "unknown" not in media_url:
+                executor.submit(delete_asset_bg, media_url, media_type or "image")
+            
+      
+            cur.execute("""
+                UPDATE messages SET 
+                    content='🗑️ This message was deleted', 
+                    deleted_status='deleted_everyone',
+                    media_url=NULL, media_type=NULL, media_name=NULL, media_thumbnail=NULL 
+                WHERE id=%s
+            """, (numeric_id,))
+            
+        else:  # delete_scope == "me"
+            
+            cur.execute("""
+                UPDATE messages 
+                SET hidden_by = 
+                    CASE 
+                        WHEN %s = ANY(COALESCE(hidden_by, '{}')) THEN hidden_by
+                        ELSE array_append(COALESCE(hidden_by, '{}'), %s)
+                    END
+                WHERE id=%s
+            """, (int(uid), int(uid), numeric_id))
+        
         conn.commit()
         cache.delete(user_cache_key("conversations", sender_id))
-        cache.delete(user_cache_key("conversations", row[1]))
-        return jsonify({"msg": "deleted"})
+        if receiver_id:
+            cache.delete(user_cache_key("conversations", receiver_id))
+        return jsonify({"msg": "deleted", "scope": delete_scope}), 200
+        
     except Exception as e:
-        conn.rollback(); logger.error(f"Delete message: {e}")
-        return jsonify({"msg": "error"}), 500
+        conn.rollback()
+        logger.error(f"delete_message: {e}")
+        return jsonify({"msg": "error", "detail": str(e)}), 500
     finally:
         cur.close(); release_conn(conn)
-
-# FIXED: Missing endpoint — edit_message was in CSS/JS but had no backend
-@app.route("/edit_message/<int:message_id>", methods=["PUT"])
+@app.route("/edit_message/<string:message_id>", methods=["PUT"])
 @token_required
 @limiter.limit("20 per minute")
 def edit_message(message_id):
     content = (request.json or {}).get("content", "").strip()
     if not content:
         return jsonify({"msg": "content_required"}), 400
+    
     conn = get_conn()
     if not conn: return jsonify({"msg": "db_error"}), 503
     cur = conn.cursor()
     try:
+        try:
+            numeric_id = int(str(message_id).replace("id-", ""))
+        except (ValueError, AttributeError):
+            return jsonify({"msg": "invalid_message_id"}), 400
+
         sender_id = resolve_user_id(cur, g.user_id)
         if not sender_id: return jsonify({"msg": "user_not_found"}), 404
-        cur.execute("SELECT sender_id FROM messages WHERE id=%s", (message_id,))
+        
+       
+        cur.execute("SELECT sender_id, deleted_status FROM messages WHERE id=%s", (numeric_id,))
         row = cur.fetchone()
         if not row: return jsonify({"msg": "not_found"}), 404
-        if row[0] != sender_id: return jsonify({"msg": "unauthorized"}), 403
-        cur.execute(
-            "UPDATE messages SET content=%s, is_edited=TRUE WHERE id=%s",
-            (content, message_id)
-        )
+        if int(row[0]) != int(sender_id): return jsonify({"msg": "unauthorized"}), 403
+        if row[1] == 'deleted_everyone': return jsonify({"msg": "message_deleted"}), 400
+        
+        
+        cur.execute("UPDATE messages SET content=%s, is_edited=TRUE WHERE id=%s", (content, numeric_id))
         conn.commit()
-        return jsonify({"msg": "updated"})
+        return jsonify({"msg": "updated"}), 200
+        
     except Exception as e:
-        conn.rollback(); logger.error(f"Edit message: {e}")
+        conn.rollback()
+        logger.error(f"Edit message: {e}")
         return jsonify({"msg": "error"}), 500
     finally:
         cur.close(); release_conn(conn)
-
 @app.route("/add_reaction", methods=["POST"])
 @token_required
 @limiter.limit("30 per minute")
@@ -1170,12 +1212,7 @@ def add_reaction():
         cur.execute("SELECT sender_id FROM messages WHERE id=%s", (message_id,))
         row = cur.fetchone()
         if not row: return jsonify({"msg": "not_found"}), 404
-        # Allow reacting to own messages is up to your product — removed that restriction
-        # (original code blocked it, keep if desired)
-        cur.execute(
-            "INSERT INTO message_reactions (message_id,user_id,emoji) VALUES (%s,%s,%s)",
-            (message_id, user_id, emoji)
-        )
+        cur.execute("INSERT INTO message_reactions (message_id,user_id,emoji) VALUES (%s,%s,%s)",(message_id, user_id, emoji))
         conn.commit()
         return jsonify({"msg": "reaction_added"})
     except Exception as e:
@@ -1201,10 +1238,7 @@ def remove_reaction():
     try:
         user_id = resolve_user_id(cur, g.user_id)
         if not user_id: return jsonify({"msg": "user_not_found"}), 404
-        cur.execute(
-            "DELETE FROM message_reactions WHERE message_id=%s AND user_id=%s AND emoji=%s",
-            (message_id, user_id, emoji)
-        )
+        cur.execute("DELETE FROM message_reactions WHERE message_id=%s AND user_id=%s AND emoji=%s",(message_id, user_id, emoji))
         conn.commit()
         return jsonify({"msg": "reaction_removed"})
     except Exception as e:
@@ -1212,87 +1246,78 @@ def remove_reaction():
         return jsonify({"msg": "error"}), 500
     finally:
         cur.close(); release_conn(conn)
+@app.route("/delete_conversation/<string:username>", methods=["POST"])
+@token_required
+def delete_conversation(username):
+    """Delete entire conversation: 'me' hides for user, 'everyone' deletes all messages"""
+    conn = get_conn()
+    if not conn: return jsonify({"msg": "db_error"}), 503
+    cur = conn.cursor()
+    try:
+        uid = resolve_user_id(cur, g.user_id)
+        if not uid: return jsonify({"msg": "user_not_found"}), 404
+        
+        # Get other user ID
+        cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+        if not row: return jsonify({"msg": "user_not_found"}), 404
+        other_id = row[0]
+        
+        data = request.json or {}
+        delete_scope = data.get("delete_for", "me")
+        
+        if delete_scope == "everyone":
+            # ✅ Only conversation starter (or either party) can delete for everyone
+            # Delete all messages in this conversation permanently
+            cur.execute("""
+                SELECT media_url, media_type FROM messages 
+                WHERE (sender_id=%s AND receiver_id=%s) OR (sender_id=%s AND receiver_id=%s)
+            """, (uid, other_id, other_id, uid))
+            
+            # Delete media from Cloudinary in background
+            for media_url, media_type in cur.fetchall():
+                if media_url and "unknown" not in media_url:
+                    executor.submit(delete_asset_bg, media_url, media_type or "image")
+            
+            # Delete all messages
+            cur.execute("""
+                DELETE FROM messages 
+                WHERE (sender_id=%s AND receiver_id=%s) OR (sender_id=%s AND receiver_id=%s)
+            """, (uid, other_id, other_id, uid))
+            
+        else:  # "me" - hide conversation for current user only
+            # Add user to hidden_by for all messages in this conversation
+            cur.execute("""
+                UPDATE messages 
+                SET hidden_by = 
+                    CASE 
+                        WHEN %s = ANY(COALESCE(hidden_by, '{}')) THEN hidden_by
+                        ELSE array_append(COALESCE(hidden_by, '{}'), %s)
+                    END
+                WHERE (sender_id=%s AND receiver_id=%s) OR (sender_id=%s AND receiver_id=%s)
+            """, (uid, uid, uid, other_id, other_id, uid))
+        
+        conn.commit()
+        
+        # Invalidate caches
+        cache.delete(user_cache_key("conversations", uid))
+        cache.delete(user_cache_key("conversations", other_id))
+        
+        return jsonify({"msg": "conversation_deleted", "scope": delete_scope}), 200
+        
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"delete_conversation: {e}")
+        return jsonify({"msg": "error", "detail": str(e)}), 500
+    finally:
+        cur.close(); release_conn(conn)
 
-# ============ DB INIT ============
 def init_db():
     conn = get_conn()
     if not conn: return False
     cur = conn.cursor()
     try:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY, name TEXT, email TEXT UNIQUE, phone TEXT UNIQUE,
-                username TEXT UNIQUE, password TEXT,
-                profile_picture TEXT DEFAULT 'unknown',
-                last_seen TIMESTAMP DEFAULT NOW()
-            );
-            CREATE TABLE IF NOT EXISTS posts (
-                id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id) ON DELETE CASCADE,
-                content TEXT, image TEXT, video TEXT,
-                created_at TIMESTAMP DEFAULT NOW(),
-                like_count INT DEFAULT 0, comment_count INT DEFAULT 0, repost_count INT DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS likes (
-                id SERIAL PRIMARY KEY,
-                user_id INT REFERENCES users(id) ON DELETE CASCADE,
-                post_id INT REFERENCES posts(id) ON DELETE CASCADE,
-                created_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(user_id,post_id)
-            );
-            CREATE TABLE IF NOT EXISTS follows (
-                id SERIAL PRIMARY KEY,
-                follower_id INT REFERENCES users(id) ON DELETE CASCADE,
-                following_id INT REFERENCES users(id) ON DELETE CASCADE,
-                created_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(follower_id,following_id)
-            );
-            CREATE TABLE IF NOT EXISTS comments (
-                id SERIAL PRIMARY KEY,
-                post_id INT REFERENCES posts(id) ON DELETE CASCADE,
-                user_id INT REFERENCES users(id) ON DELETE CASCADE,
-                content TEXT, created_at TIMESTAMP DEFAULT NOW()
-            );
-            CREATE TABLE IF NOT EXISTS reposts (
-                id SERIAL PRIMARY KEY,
-                user_id INT REFERENCES users(id) ON DELETE CASCADE,
-                post_id INT REFERENCES posts(id) ON DELETE CASCADE,
-                created_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(user_id,post_id)
-            );
-            CREATE TABLE IF NOT EXISTS messages (
-                id SERIAL PRIMARY KEY,
-                sender_id INT REFERENCES users(id) ON DELETE CASCADE,
-                receiver_id INT REFERENCES users(id) ON DELETE CASCADE,
-                content TEXT, created_at TIMESTAMP DEFAULT NOW(),
-                is_read BOOLEAN DEFAULT FALSE,
-                is_edited BOOLEAN DEFAULT FALSE,
-                reply_to_id INT REFERENCES messages(id) ON DELETE SET NULL
-            );
-            CREATE TABLE IF NOT EXISTS message_reactions (
-                id SERIAL PRIMARY KEY,
-                message_id INT REFERENCES messages(id) ON DELETE CASCADE,
-                user_id INT REFERENCES users(id) ON DELETE CASCADE,
-                emoji TEXT, created_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(message_id,user_id,emoji)
-            );
-
-            -- Add is_edited column if upgrading from old schema
-            ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_edited BOOLEAN DEFAULT FALSE;
-
-            -- Performance indexes
-            CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id, created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_msgs_sender_receiver ON messages(sender_id, receiver_id, created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_msgs_receiver_read ON messages(receiver_id, is_read) WHERE is_read=FALSE;
-            CREATE INDEX IF NOT EXISTS idx_follows ON follows(follower_id, following_id);
-            CREATE INDEX IF NOT EXISTS idx_likes_post ON likes(post_id);
-            CREATE INDEX IF NOT EXISTS idx_reposts_post ON reposts(post_id);
-            CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id, created_at);
-            CREATE INDEX IF NOT EXISTS idx_users_lookup ON users(username);
-            CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-            CREATE INDEX IF NOT EXISTS idx_reactions_msg ON message_reactions(message_id);
-            CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen DESC);
-        """)
+        cur.execute("""CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT, email TEXT UNIQUE, phone TEXT UNIQUE,username TEXT UNIQUE, password TEXT,profile_picture TEXT DEFAULT 'unknown',last_seen TIMESTAMP DEFAULT NOW());CREATE TABLE IF NOT EXISTS posts (id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id) ON DELETE CASCADE,content TEXT, image TEXT, video TEXT,created_at TIMESTAMP DEFAULT NOW(),like_count INT DEFAULT 0, comment_count INT DEFAULT 0, repost_count INT DEFAULT 0);CREATE TABLE IF NOT EXISTS likes (id SERIAL PRIMARY KEY,user_id INT REFERENCES users(id) ON DELETE CASCADE,post_id INT REFERENCES posts(id) ON DELETE CASCADE,created_at TIMESTAMP DEFAULT NOW(),UNIQUE(user_id,post_id));CREATE TABLE IF NOT EXISTS follows (id SERIAL PRIMARY KEY,follower_id INT REFERENCES users(id) ON DELETE CASCADE,following_id INT REFERENCES users(id) ON DELETE CASCADE,created_at TIMESTAMP DEFAULT NOW(),UNIQUE(follower_id,following_id));CREATE TABLE IF NOT EXISTS comments (id SERIAL PRIMARY KEY,post_id INT REFERENCES posts(id) ON DELETE CASCADE,user_id INT REFERENCES users(id) ON DELETE CASCADE,content TEXT, created_at TIMESTAMP DEFAULT NOW());CREATE TABLE IF NOT EXISTS reposts (id SERIAL PRIMARY KEY,user_id INT REFERENCES users(id) ON DELETE CASCADE,post_id INT REFERENCES posts(id) ON DELETE CASCADE,created_at TIMESTAMP DEFAULT NOW(),UNIQUE(user_id,post_id));CREATE TABLE IF NOT EXISTS messages (id SERIAL PRIMARY KEY,sender_id INT REFERENCES users(id) ON DELETE CASCADE,receiver_id INT REFERENCES users(id) ON DELETE CASCADE,content TEXT, created_at TIMESTAMP DEFAULT NOW(),is_read BOOLEAN DEFAULT FALSE,is_edited BOOLEAN DEFAULT FALSE,reply_to_id INT REFERENCES messages(id) ON DELETE SET NULL,media_url TEXT,media_type TEXT,media_name TEXT,media_size BIGINT,media_thumbnail TEXT,hidden_by INT[] DEFAULT '{}',deleted_status TEXT DEFAULT 'active');CREATE TABLE IF NOT EXISTS message_reactions (id SERIAL PRIMARY KEY,message_id INT REFERENCES messages(id) ON DELETE CASCADE,user_id INT REFERENCES users(id) ON DELETE CASCADE,emoji TEXT, created_at TIMESTAMP DEFAULT NOW(),UNIQUE(message_id,user_id,emoji));ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_edited BOOLEAN DEFAULT FALSE;CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC);CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id, created_at DESC);CREATE INDEX IF NOT EXISTS idx_msgs_sender_receiver ON messages(sender_id, receiver_id, created_at DESC);CREATE INDEX IF NOT EXISTS idx_msgs_receiver_read ON messages(receiver_id, is_read) WHERE is_read=FALSE;CREATE INDEX IF NOT EXISTS idx_follows ON follows(follower_id, following_id);CREATE INDEX IF NOT EXISTS idx_likes_post ON likes(post_id);CREATE INDEX IF NOT EXISTS idx_reposts_post ON reposts(post_id);CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id, created_at);CREATE INDEX IF NOT EXISTS idx_users_lookup ON users(username);CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);CREATE INDEX IF NOT EXISTS idx_reactions_msg ON message_reactions(message_id);CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen DESC);""")
         conn.commit()
         logger.info("✅ Tables & indexes ready")
         return True
@@ -1301,8 +1326,18 @@ def init_db():
         return False
     finally:
         cur.close(); release_conn(conn)
-
-# ============ STARTUP ============
+@app.route("/get_user_status/<username>", methods=["GET"])
+@token_required
+def get_user_status(username):
+    conn = get_conn()
+    if not conn: return jsonify({"is_online": False}), 503
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT CASE WHEN last_seen > NOW() - INTERVAL '30 seconds' THEN TRUE ELSE FALSE END FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+        return jsonify({"is_online": bool(row[0]) if row else False})
+    finally:
+        cur.close(); release_conn(conn)
 init_db_pool()
 init_db()
 logger.info("🚀 App loaded — optimized for Render free tier")
