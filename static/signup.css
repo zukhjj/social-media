@@ -1,0 +1,367 @@
+body{
+    background-image: url("back.jpg");
+    background-repeat: no-repeat;
+    background-size: cover;
+    color: white;
+    align-items: center; 
+    
+    display: flex;
+    justify-content: center;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+}
+h1{
+    text-shadow: 0px 0px 70px white;
+    cursor: pointer;
+}
+#box{
+    background: rgba(0, 0, 0, 0.4); 
+    backdrop-filter: blur(10px);    
+    -webkit-backdrop-filter: blur(10px); 
+    box-shadow: 0px 0px 100px rgb(58, 57, 57);
+    border-radius: 20px;
+    text-align: center;
+    padding: 50px 50px 100px 50px;
+    width: 35%;
+    margin: 100px;
+}
+
+/* ✅ ✅ ✅ ONLY INBOX SECTION - MODIFIED FOR ALL DEVICES ✅ ✅ ✅ */
+.inbox {
+    position: relative;
+    width: 70%;
+    transition: all 1.2s;
+    display: flex;
+    align-items: center;
+    justify-content:center;
+    margin: auto;
+    box-sizing: border-box;
+}
+
+.user{
+    border-radius: 8px;
+    border: solid white 1px;
+    height: 40px;
+    padding-left: 10px;
+    color: white;
+    box-sizing: border-box;
+    background-color: transparent;
+    width: 70%;
+    transition: all 1.2s;
+}
+.error{
+    color: red;
+    text-shadow: 0px 0px 20px red;
+    margin-bottom: -10px;
+}
+
+.user:focus{
+    box-shadow: 0px 0px 8px white;
+}
+.inbox:focus-within {
+    box-shadow: 0px 0px 8px white;
+    border-radius: 8px;
+}
+.password:focus{
+    border-right: none;
+    outline: none;   
+}
+a{
+    color: rgb(106, 57, 241);
+    font-weight: bold;
+}
+a:hover{
+    text-decoration: none;
+}
+
+/* ✅ ✅ ✅ ONLY .ic - MODIFIED ✅ ✅ ✅ */
+.inbox .ic {
+    padding: 9px;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+    border: solid white 1px;
+    height: 40px;
+    width: 40px;
+    min-width: 40px;
+    cursor: pointer;
+    transition: 0.7s;
+    border-left: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-sizing: border-box;
+}
+.inbox img{
+    opacity: 0.7;
+}
+.inbox img:hover{
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+/* ✅ ✅ ✅ ONLY .password - MODIFIED ✅ ✅ ✅ */
+.password{
+    position: relative;
+    border-top-left-radius: 8px;
+    border: solid white 1px;
+    border-bottom-left-radius: 8px;
+    border-right: none;
+    height: 40px;
+    color: white;
+    padding-right: 40px;
+    padding-left: 10px;
+    box-sizing: border-box;
+    background-color: transparent;
+    width: calc(100% - 40px);
+    flex: 1;
+    min-width: 0;
+}
+
+input[type="submit"] {
+  background-color: rgb(52, 206, 52);
+  width: 70%;
+  box-shadow: 0px 0px 10px rgb(52, 206, 52);
+  border-radius: 8px;
+  height: 35px;
+  border: solid 1px  rgb(52, 206, 52);
+  color: white;
+  opacity: 70%;
+  transition: all 1.2s;
+}
+
+input[type="button"]{
+  background-color: rgb(66, 80, 237);
+  width: 70%;
+  box-shadow: 0px 0px 10px rgb(66, 80, 237);
+  border-radius: 8px;
+  height: 35px;
+  border: solid 1px rgb(66, 80, 237);
+  color: white;
+  opacity: 70%;
+  transition: all 1.2s;
+}
+input[type="submit"]:hover{
+    background-color: rgb(46, 180, 46);
+     box-shadow: none;
+    transition: all 1s;
+}
+input[type="button"]:hover{
+    background-color: rgb(55, 67, 201);
+     box-shadow: none;
+    transition: all 1s;
+
+}
+.social-box {
+    margin: 20px 0;
+    width: 100%;
+}
+
+
+.line {
+    display: flex; 
+    align-items: center; 
+    color: rgba(255,255,255,0.3); 
+    margin-bottom: 15px;
+}
+.line::before, .line::after {
+    content: ""; flex: 1; height: 1px; background: rgba(255,255,255,0.2); margin: 0 10px;
+}
+
+/* ✅ ✅ ✅ MEDIA QUERIES - ONLY INBOX PARTS MODIFIED ✅ ✅ ✅ */
+@media screen and (max-width: 1028px) {
+    body {
+        display: flex;           
+        flex-direction: column;     
+        justify-content: center;   
+        align-items: center;       
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;         
+        background-image: none;
+        background-color: black;
+    }
+
+    #box {
+        width: 90%;              
+        max-width: 400px;
+        margin: 20px auto;          
+        padding: 30px 20px 70px;         
+        background-color: rgba(0, 0, 0, 0.8);
+        border-radius: 20px;
+        box-shadow: none;
+    }
+
+    .navbar {
+        position: relative;
+        height: auto;
+        padding: 10px;
+        flex-direction: column;
+    }
+
+    .logo img {
+        margin: 0px auto !important;  
+    }
+
+    #phone {
+        display: block;
+        margin: 0 auto 70px;     
+    }
+
+    #pc {
+        display: none;
+    }
+     .inbox img:hover{
+        opacity: 1;
+        transform:none;
+    }
+    h1 {
+        display: none;          
+    }
+
+     .user, input[type="submit"], input[type="button"] {
+        width: 100%;
+        margin: 8px 0;
+    }
+
+    /* ✅ ONLY INBOX MODIFIED */
+    .inbox {
+        width: 100%;
+        height: 40px;
+        display: flex;
+        align-items: center;
+    }
+
+    /* ✅ ONLY .ic MODIFIED */
+    .ic {
+        width: 40px;
+        min-width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    
+    /* ✅ ONLY .password MODIFIED */
+    .password{
+        width: calc(100% - 40px);
+        height: 40px;
+        padding-right: 40px;
+    }
+}
+
+@media screen and (max-width: 480px) {
+    body {
+        display: flex;           
+        flex-direction: column;     
+        justify-content: center;   
+        align-items: center;       
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;         
+        background-image: none;
+        background-color: black;
+    }
+
+    #box {
+        width: 90%;              
+        margin: 20px auto;          
+        padding: 30px 20px 70px;         
+        background-color: rgba(0, 0, 0, 0.8);
+        border-radius: 20px;
+        box-shadow: none;
+    }
+
+    .navbar {
+        position: relative;
+        height: auto;
+        padding: 10px;
+        flex-direction: column;
+    }
+
+    .logo img {
+        margin: 0px auto !important;  
+    }
+
+    #phone {
+        display: block;
+        margin: 0 auto 70px;     
+    }
+
+    #pc {
+        display: none;
+    }
+     .inbox img:hover{
+        opacity: 1;
+        transform:none;
+    }
+    h1 {
+        display: none;          
+    }
+
+     .user, input[type="submit"], input[type="button"] {
+        width: 100%;
+        margin: 8px 0;
+    }
+
+    /* ✅ ONLY INBOX MODIFIED */
+    .inbox {
+        width: 100%;
+        height: 40px;
+        display: flex;
+        align-items: center;
+    }
+
+    /* ✅ ONLY .ic MODIFIED */
+    .ic {
+        width: 40px;
+        min-width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    
+    /* ✅ ONLY .password MODIFIED */
+    .password{
+        width: calc(100% - 40px);
+        height: 40px;
+        padding-right: 40px;
+        font-size: 16px;
+    }
+}
+
+.navbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 60px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 20px;
+    color: white;
+    z-index: 1000;
+}
+
+.logo {
+    font-size: 20px;
+    font-weight: bold;
+    cursor: pointer;
+    margin-left: 20px;
+}
+.nav-links{
+    margin-right: 80px;
+}
+.nav-links a {
+    color: white;
+    margin-left: 15px;
+    text-decoration: none;
+    opacity: 0.7;
+}
+
+.nav-links a:hover {
+    opacity: 1;
+}
