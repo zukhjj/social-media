@@ -9,24 +9,47 @@
     <script src="home.js" defer></script>
 </head>
 <body>
+
+    <!-- ── App Bar ── -->
     <div id="app-bar">
         <header class="top-bar">
             <a href="home.html"><img src="logo.png" id="logo" alt="Social Grid Logo"></a>
+
+            <!-- BUG FIX: search now wired to real search (initSearch() in JS) -->
             <div class="search-container">
-                <input type="search" id="search-input" class="search-input" placeholder="Search posts, users, tags..." aria-label="Search" onkeydown="if(event.key==='Enter')console.log('Searching:',this.value)">
                 <img src="search.png" class="search-icon" alt="">
+                <input
+                    type="search"
+                    id="search-input"
+                    class="search-input"
+                    placeholder="Search people…"
+                    autocomplete="off"
+                    aria-label="Search users">
+                <!-- Dropdown injected by initSearch() -->
             </div>
-           <img src="unkown.png" id="profile-img" alt="User Profile" class="profile-btn" tabindex="0" onclick="loadUserPage(localStorage.getItem('username'))">
+
+            <img
+                src="unkown.png"
+                id="profile-img"
+                alt="My Profile"
+                class="profile-btn"
+                tabindex="0"
+                title="View my profile"
+                onclick="loadUserPage(localStorage.getItem('username'))">
         </header>
     </div>
 
+    <!-- ── Main Layout ── -->
     <main class="layout">
-        <nav class="sidebar left-sidebar" aria-label="Main Navigation">
-            <a href="#" class="nav-item active" onclick="setActive(this,event)">
-                <img src="home.png" alt="" class="nav-icon"><span class="nav-label">Home</span>
 
+        <!-- Left sidebar / bottom nav on mobile -->
+        <nav class="sidebar left-sidebar" aria-label="Main Navigation">
+            <a href="#" class="nav-item active" onclick="setActive(this,event); backToFeed();">
+                <img src="home.png" alt="" class="nav-icon"><span class="nav-label">Home</span>
             </a>
-            <a href="/messages.html" class="nav-item"> <img src="chat.png" alt="" class="nav-icon"><span class="nav-label">chat</span></a>
+            <a href="/messages.html" class="nav-item">
+                <img src="chat.png" alt="" class="nav-icon"><span class="nav-label">Chat</span>
+            </a>
             <a href="#" class="nav-item" onclick="setActive(this,event)">
                 <img src="search2.png" alt="" class="nav-icon"><span class="nav-label">Explore</span>
             </a>
@@ -38,115 +61,151 @@
             </a>
         </nav>
 
-        <section class="feed center-feed" aria-label="Post Feed" id="feed-container">
+        <!-- Center feed -->
+        <section class="center-feed" aria-label="Post Feed" id="feed-container">
+
+            <!-- Add post box -->
             <div id="add-post">
                 <div class="add-post-header">
-                    <img src="unkown.png" id="text">
-                    <textarea id="post-content" placeholder="What's happening?"></textarea>
+                    <img src="unkown.png" id="text" alt="Your avatar">
+                    <textarea
+                        id="post-content"
+                        placeholder="What's happening?"
+                        rows="2"
+                        onkeydown="if(event.ctrlKey&&event.key==='Enter')addPost()"></textarea>
                 </div>
-                <div class="preview-wrap" id="preview-wrap">
-                    <img id="preview">
-                    <button class="cancel-btn" onclick="cancelImage()">✕</button>
-                </div>
+
+                <!-- Media preview -->
+                <div class="preview-wrap" id="preview-wrap" style="display:none;"></div>
+
                 <div class="add-post-actions">
                     <div class="add-icons">
-    <label for="post-image" title="Add Image">
-        <img src="image.png" alt="Image">
-    </label>
-    <input type="file" id="post-image" accept="image/*" style="display:none;">
-    
+                        <label for="post-image" title="Add Image">
+                            <img src="image.png" alt="Image">
+                        </label>
+                        <input type="file" id="post-image" accept="image/*">
 
-    <label for="post-video" title="Add Video (Max 20MB)">
-        <img src="video.png" width="20px" class="video" alt="Video" style="opacity:0.8; width: 27px;">
-    </label>
-    <input type="file" id="post-video" accept="video/mp4,video/webm,video/quicktime" style="display:none;">
-</div>
-                    <a class="post-btn"  onclick="addPost()"><img src="post.png" alt=""><a>
+                        <label for="post-video" title="Add Video (max 20 MB)">
+                            <img src="video.png" alt="Video" style="width:26px;">
+                        </label>
+                        <input type="file" id="post-video" accept="video/mp4,video/webm,video/quicktime">
+                    </div>
+
+                    <select id="post-visibility" title="Who can see this?">
+                        <option value="public">🌍 Public</option>
+                        <option value="friends">👥 Friends</option>
+                        <option value="private">🔒 Private</option>
+                    </select>
+
+                    <button class="post-btn" onclick="addPost()" title="Post (Ctrl+Enter)">
+                        <img src="post.png" alt="Post">
+                    </button>
                 </div>
             </div>
+
         </section>
 
-        <aside class="sidebar right-sidebar" aria-label="Friends List">
+        <!-- Right sidebar -->
+        <aside class="sidebar right-sidebar" aria-label="Friends">
             <h3 class="sidebar-title">Friends</h3>
-            <div class="friend-list">
-                
-            </div>
+            <div class="friend-list"></div>
         </aside>
+
     </main>
 
-    <dialog id="v"><img src="" onclick="closeFull()"></dialog>
-    <dialog id="confirm-post">
+    <!-- ── Fullscreen image viewer ── -->
+    <dialog id="v" aria-label="Full-size image">
+        <img src="" onclick="closeFull()" alt="Full-size image">
+    </dialog>
+
+    <!-- ── Confirm post dialog ── -->
+    <dialog id="confirm-post" aria-label="Confirm post">
         <div class="confirm-box">
-            <h3>Post preview</h3>
+            <h3>Preview post</h3>
             <p id="confirm-text"></p>
-            <img id="confirm-img">
+            <!-- #confirm-media and #confirm-visibility-wrap injected by addPost() -->
             <div class="confirm-actions">
-                <button onclick="submitPost()">Confirm</button>
+                <button onclick="submitPost()">Publish</button>
                 <button onclick="closeConfirm()">Cancel</button>
             </div>
         </div>
     </dialog>
-    <div id="toast" class="toast"></div>
-    <dialog id="post-options-dialog">
-    <div class="options-box">
-        <button onclick="openEditDialog()">Edit Post</button>
-        <button onclick="deleteCurrentPost()" style="color:#ef4444;">Delete Post</button>
-        <button onclick="document.getElementById('post-options-dialog').close()">Cancel</button>
-    </div>
-</dialog>
 
-<dialog id="edit-dialog">
-    <div class="edit-box">
-        <h3 style="margin:0 0 10px;font-size:16px;color:var(--text-primary);">Edit Post</h3>
-        <textarea id="edit-content" placeholder="Update your post..."></textarea>
-        <div id="edit-preview"></div>
-        <label for="edit-image" class="edit-img-label">Change Image (Optional)</label>
-        <input type="file" id="edit-image" accept="image/*" style="display:none;">
-        <div class="edit-actions">
-            <button onclick="saveEdit()">Save Changes</button>
-            <button onclick="document.getElementById('edit-dialog').close()">Cancel</button>
+    <!-- ── Post options dialog ── -->
+    <dialog id="post-options-dialog" aria-label="Post options">
+        <div class="options-box">
+            <button onclick="openEditDialog()">✏️ Edit Post</button>
+            <button class="danger" onclick="deleteCurrentPost()">🗑️ Delete Post</button>
+            <button class="cancel-style" onclick="document.getElementById('post-options-dialog').close()">Cancel</button>
         </div>
-    </div>
-</dialog>
+    </dialog>
 
-<dialog id="edit-profile-dialog">
-    <div class="edit-profile-box">
-        <h3>Edit Profile</h3>
-        <form id="edit-profile-form" onsubmit="event.preventDefault(); saveProfileChanges();">
-            <div class="profile-pic-section">
-                <img id="edit-profile-preview" src="unkown.png">
-                <label for="edit-profile-image" class="upload-btn">Change Photo</label>
-                <input type="file" id="edit-profile-image" accept="image/*" style="display:none;">
+    <!-- ── Edit post dialog ── -->
+    <dialog id="edit-dialog" aria-label="Edit post">
+        <div class="edit-box">
+            <h3>Edit Post</h3>
+            <textarea id="edit-content" placeholder="Update your post…"></textarea>
+            <!-- #edit-visibility injected by openEditDialog() -->
+            <div id="edit-preview"></div>
+            <label for="edit-image" class="edit-img-label">📷 Change Image (optional)</label>
+            <input type="file" id="edit-image" accept="image/*" style="display:none;">
+            <div class="edit-actions">
+                <button onclick="saveEdit()">Save Changes</button>
+                <button id="edit-dialog-cancel" onclick="document.getElementById('edit-dialog').close()">Cancel</button>
             </div>
-            <center><p style="margin: 4px; text-shadow: 0px 0px 70px red; color: red;" id="error-global"></center>
-            <input type="text" id="edit-name" placeholder="Full Name" required>
-            
-            <input type="text" id="edit-username" placeholder="Username" required>
-            <center><p style="margin: 4px; text-shadow: 0px 0px 40px red; color: red;" id="error-user"></p></center>
-            <input type="email" id="edit-email" placeholder="Email (Optional)">
-            <center><p style="margin: 4px; text-shadow: 0px 0px 70px red; color: red;" id="error-email"></p></center>
-            <input type="tel" id="edit-phone" placeholder="Phone (Optional)">
-            <center><p style="margin: 4px; text-shadow: 0px 0px 70px red; color: red;" id="error-phone"></p></center>
-            <div id="password-section" style="display:none; margin-top:10px;">
-                <input type="password" id="edit-old-pass" placeholder="Old Password">
-                <center><p style="margin: 4px; text-shadow: 0px 0px 70px red; color: red;" id="error-old-pass"></p></center>
-                <input type="password" id="edit-new-pass" placeholder="New Password">
-                <center><p style="margin: 4px; text-shadow: 0px 0px 70px red; color: red;" id="error-new-pass"></p></center>
-                <input type="password" id="edit-confirm-pass" placeholder="Confirm New Password">
-                <center><p style="margin: 4px; text-shadow: 0px 0px 70px red; color: red;" id="error-conf-pass"></p></center>
-            </div>
-            <button type="button" class="toggle-pass-btn" onclick="togglePasswordSection()">🔒 Change Password</button>
+        </div>
+    </dialog>
 
-            <div class="form-actions">
-                <button type="submit" class="save-btn">Save Changes</button>
-                
-    <button type="button" id="edit-profile-cancel" onclick="document.getElementById('edit-profile-dialog').close()">Cancel</button>
+    <!-- ── Edit profile dialog ── -->
+    <dialog id="edit-profile-dialog" aria-label="Edit profile">
+        <div class="edit-profile-box">
+            <h3>Edit Profile</h3>
 
-            </div>
-        </form>
-    </div>
-</dialog>
-<div id="toast-container" class="toast-container"></div>
+            <form id="edit-profile-form" onsubmit="event.preventDefault(); saveProfileChanges();">
+                <div class="profile-pic-section">
+                    <img id="edit-profile-preview" src="unkown.png" alt="Profile preview">
+                    <br>
+                    <label for="edit-profile-image" class="upload-btn">Change Photo</label>
+                    <input type="file" id="edit-profile-image" accept="image/*" style="display:none;"
+                        onchange="const f=this.files[0];if(f){document.getElementById('edit-profile-preview').src=URL.createObjectURL(f);}">
+                </div>
+
+                <p class="field-error" id="error-global"></p>
+
+                <input type="text"  id="edit-name"     placeholder="Full Name"       required>
+                <input type="text"  id="edit-username"  placeholder="Username"        required>
+                <p class="field-error" id="error-user"></p>
+
+                <input type="email" id="edit-email"    placeholder="Email (optional)">
+                <p class="field-error" id="error-email"></p>
+
+                <input type="tel"   id="edit-phone"    placeholder="Phone (optional)">
+                <p class="field-error" id="error-phone"></p>
+
+                <div id="password-section" style="display:none;">
+                    <input type="password" id="edit-old-pass"     placeholder="Current Password">
+                    <p class="field-error" id="error-old-pass"></p>
+                    <input type="password" id="edit-new-pass"     placeholder="New Password (min 6)">
+                    <p class="field-error" id="error-new-pass"></p>
+                    <input type="password" id="edit-confirm-pass" placeholder="Confirm New Password">
+                    <p class="field-error" id="error-conf-pass"></p>
+                </div>
+
+                <button type="button" class="toggle-pass-btn" onclick="togglePasswordSection()">
+                    🔒 Change Password
+                </button>
+
+                <div class="form-actions">
+                    <button type="submit" class="save-btn">Save Changes</button>
+                    <button type="button" id="edit-profile-cancel"
+                        onclick="document.getElementById('edit-profile-dialog').close()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <!-- Toast container -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
 </body>
 </html>
