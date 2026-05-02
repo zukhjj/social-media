@@ -7,6 +7,13 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { margin: 0; height: 100%; }
 
+/* 🔍 DEBUG: Force visibility to diagnose */
+
+
+/* Show if element is hidden by overflow */
+.chat-main, .chat-active, .messages-container {
+    outline: 2px solid rgba(78, 205, 196, 0.3);
+}
 /* ===== ROOT VARIABLES — ENHANCED ===== */
 :root {
     /* Backgrounds — Deep layered gradients */
@@ -110,12 +117,11 @@ body {
 @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
 @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 
-/* ===== MESSAGES PAGE LAYOUT ===== */
 .chat-layout {
     display: grid;
     grid-template-columns: 360px 1fr;
     margin: 64px auto 0;
-    height: 100dvh;
+    height: calc(100dvh - 64px); /* ✅ Account for top bar margin */
     max-width: 1400px;
     background: var(--bg-secondary);
     border-radius: var(--radius-lg);
@@ -470,6 +476,7 @@ body {
     flex-direction: column; 
     flex: 1; 
     min-height: 0; 
+    position: relative; /* ✅ Create stacking context */
 }
 
 /* Chat Header */
@@ -549,12 +556,12 @@ body {
 }
 .chat-status.offline { background: var(--status-offline); }
 
-/* ===== MESSAGES CONTAINER ===== */
 .messages-container {
     flex: 1; 
     min-height: 0; 
     overflow-y: auto; 
     padding: 20px;
+    padding-bottom: 20px; /* ✅ Space for input */
     display: flex; 
     flex-direction: column; 
     gap: 16px;
@@ -940,16 +947,17 @@ body {
 /* ===== CHAT INPUT ===== */
 .chat-input-wrap {
     flex: 0 0 auto; 
+    flex-shrink: 0; /* ✅ Prevent compression */
     padding: 14px 20px; 
     border-top: 1px solid var(--border-color);
     display: flex; 
     gap: 10px; 
     align-items: center; 
     background: linear-gradient(180deg, transparent, var(--bg-tertiary));
-    z-index: 2;
+    z-index: 100; /* ✅ Higher than messages */
     position: relative;
-    
 }
+
 .chat-input-wrap::before {
     content: '';
     position: absolute;
@@ -1036,7 +1044,6 @@ body {
     transform: scale(1.15) rotate(15deg);
 }
 
-/* ===== MEDIA PREVIEW ===== */
 .media-preview {
     padding: 12px 20px 0; 
     background: linear-gradient(180deg, var(--bg-secondary), var(--bg-tertiary));
@@ -1046,9 +1053,10 @@ body {
     gap: 12px;
     animation: var(--anim-slide);
     border-left: 3px solid var(--accent);
+    z-index: 50; /* ✅ Below input but above messages */
+    position: relative;
 }
 .media-preview.hidden { display: none; }
-
 #preview-content {
     flex: 1; 
     display: flex; 
