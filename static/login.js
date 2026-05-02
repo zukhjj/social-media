@@ -1,7 +1,7 @@
 let googleLoading = false;
 
 function show() {
-    let img = document.getElementById("ic");
+    let img = document.getElementById("ii1");
     let passInput = document.getElementById("password");
     if (!img || !passInput) return;
     let currentSrc = img.getAttribute("src");
@@ -15,7 +15,7 @@ function show() {
 }
 
 function show1() {
-    let img = document.getElementById("ic2");
+    let img = document.getElementById("ii");
     let passInput = document.getElementById("repassword");
     if (!img || !passInput) return;
     let currentSrc = img.getAttribute("src");
@@ -28,15 +28,8 @@ function show1() {
     }
 }
 
-function hide() {
-    let img = document.getElementById("ic");
-    if (img) img.style.display = "block";
-}
 
-function hide1() {
-    let img = document.getElementById("ic2");
-    if (img) img.style.display = "block";
-}
+
 
 function parseJwt(token) {
     try {
@@ -263,14 +256,5 @@ document.addEventListener("DOMContentLoaded", async function() {
     });
     const password = document.getElementById("password");
     const repassword = document.getElementById("repassword");
-    const eye1 = document.getElementById("ic");
-    const eye2 = document.getElementById("ic2");
-    if (password && eye1) {
-        password.addEventListener("focus", () => { if (password.value) eye1.style.display = "block"; });
-        password.addEventListener("blur", () => { if (!password.value) eye1.style.display = "none"; });
-    }
-    if (repassword && eye2) {
-        repassword.addEventListener("focus", () => { if (repassword.value) eye2.style.display = "block"; });
-        repassword.addEventListener("blur", () => { if (!repassword.value) eye2.style.display = "none"; });
-    }
+    
 });
