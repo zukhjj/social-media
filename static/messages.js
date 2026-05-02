@@ -7,6 +7,37 @@ function getTimeAgo(dateStr) {
     return diff < 60 ? "now" : diff < 3600 ? Math.floor(diff / 60) + "m" : diff < 86400 ? Math.floor(diff / 3600) + "h" : Math.floor(diff / 86400) + "d";
 }
 
+// ══════════════════════════════════════════════════════════════
+// 📤 CLOUDINARY UPLOAD HELPER (Required for multi-image send)
+// ══════════════════════════════════════════════════════════════
+async function uploadToCloudinary(file) {
+    const isVideo = file.type.startsWith('video/');
+    const preset = 'video_posts';
+    const resourceType = isVideo ? 'video' : 'image';
+    const cloudName = 'dlimysibj';
+    
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    formData.append('upload_preset', preset);
+    formData.append('resource_type', resourceType);
+    
+    try {
+        const res = await fetch(
+            `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`,
+            { method: 'POST', body: formData }
+        );
+        const data = await res.json();
+        
+        if (!res.ok || data.error) {
+            throw new Error(data.error?.message || 'Upload failed');
+        }
+        return data.secure_url;
+    } catch (err) {
+        console.error('Cloudinary upload error:', err);
+        throw err;
+    }
+}
+
 // ✅ Simple toggle function - works on ALL devices
 window.toggleMessageActions = function(bubble) {
     if (event.target.closest('.msg-action-btn')) return;
@@ -145,78 +176,94 @@ function compressImage(file, maxWidth = 1920, quality = 0.8) {
 
 // ===== HANDLE FILE SELECTION =====
 async function handleMediaSelect(event) {
-    const file = event.target.files[0];
-    if (!file) return;
+    const files = Array.from(event.target.files);
+    if (!files.length) return;
     
-  
-    const maxSize = file.type.startsWith('video/') ? 50*1024*1024 :
-                    file.type.startsWith('audio/') ? 20*1024*1024 :
-                    file.type.startsWith('image/') ? 10*1024*1024 :
-                    100*1024*1024; 
+    // Filter to images only for multi-select
+    const imageFiles = files.filter(f => f.type.startsWith('image/')).slice(0, 10);
     
-    if (file.size > maxSize) {
-        const maxMB = maxSize / (1024*1024);
-        showToast(`File too large (max ${maxMB}MB)`, "error");
+    if (imageFiles.length === 0) {
+        // Fallback to original single-file handling
+        const file = files[0];
+        if (!file) return;
+        
+        const maxSize = file.type.startsWith('video/') ? 50*1024*1024 :
+                        file.type.startsWith('audio/') ? 20*1024*1024 :
+                        file.type.startsWith('image/') ? 10*1024*1024 :
+                        100*1024*1024; 
+        
+        if (file.size > maxSize) {
+            const maxMB = maxSize / (1024*1024);
+            showToast(`File too large (max ${maxMB}MB)`, "error");
+            event.target.value = '';
+            return;
+        }
+        
+        const preview = document.getElementById('preview-content');
+        const previewWrap = document.getElementById('media-preview');
+        
+        if (file.type.startsWith('image/')) {
+            const compressed = await compressImage(file);
+            pendingMedia = { file: compressed, type: 'image', name: file.name, size: compressed.size };
+            const reader = new FileReader();
+            reader.onload = e => {
+                preview.innerHTML = `
+                    <img src="${e.target.result}" alt="preview">
+                    <div class="preview-info">
+                        <div class="preview-name">${escapeHtml(file.name)}</div>
+                        <div class="preview-size">${formatBytes(compressed.size)}</div>
+                    </div>
+                `;
+                previewWrap.classList.remove('hidden');
+            };
+            reader.readAsDataURL(compressed);
+        } else if (file.type.startsWith('video/')) {
+            pendingMedia = { file, type: 'video', name: file.name, size: file.size };
+            const url = URL.createObjectURL(file);
+            preview.innerHTML = `
+                <video src="${url}" muted></video>
+                <div class="preview-info">
+                    <div class="preview-name">${escapeHtml(file.name)}</div>
+                    <div class="preview-size">${formatBytes(file.size)}</div>
+                </div>
+            `;
+            previewWrap.classList.remove('hidden');
+        } else if (file.type.startsWith('audio/')) {
+            pendingMedia = { file, type: 'audio', name: file.name, size: file.size };
+            const url = URL.createObjectURL(file);
+            const icon = getFileIcon(file.name);
+            preview.innerHTML = `
+                <div style="font-size:40px;text-align:center;">${icon}</div>
+                <div class="preview-info">
+                    <div class="preview-name">${escapeHtml(file.name)}</div>
+                    <div class="preview-size">${formatBytes(file.size)}</div>
+                    <div style="font-size:11px;color:var(--text-muted);">Audio</div>
+                </div>
+            `;
+            previewWrap.classList.remove('hidden');
+        } else {
+            pendingMedia = { file, type: 'document', name: file.name, size: file.size };
+            const icon = getFileIcon(file.name);
+            preview.innerHTML = `
+                <div style="font-size:40px;text-align:center;">${icon}</div>
+                <div class="preview-info">
+                    <div class="preview-name">${escapeHtml(file.name)}</div>
+                    <div class="preview-size">${formatBytes(file.size)}</div>
+                    <div style="font-size:11px;color:var(--text-muted);">Document</div>
+                </div>
+            `;
+            previewWrap.classList.remove('hidden');
+        }
         event.target.value = '';
         return;
     }
     
-    const preview = document.getElementById('preview-content');
-    const previewWrap = document.getElementById('media-preview');
+    // Multi-image handling
+    const compressed = await Promise.all(imageFiles.map(f => compressImage(f)));
+    pendingMedia = { files: compressed, type: 'multi-image', count: compressed.length };
     
-    if (file.type.startsWith('image/')) {
-        const compressed = await compressImage(file);
-        pendingMedia = { file: compressed, type: 'image', name: file.name, size: compressed.size };
-        const reader = new FileReader();
-        reader.onload = e => {
-            preview.innerHTML = `
-                <img src="${e.target.result}" alt="preview">
-                <div class="preview-info">
-                    <div class="preview-name">${escapeHtml(file.name)}</div>
-                    <div class="preview-size">${formatBytes(compressed.size)}</div>
-                </div>
-            `;
-            previewWrap.classList.remove('hidden');
-        };
-        reader.readAsDataURL(compressed);
-    } else if (file.type.startsWith('video/')) {
-        pendingMedia = { file, type: 'video', name: file.name, size: file.size };
-        const url = URL.createObjectURL(file);
-        preview.innerHTML = `
-            <video src="${url}" muted></video>
-            <div class="preview-info">
-                <div class="preview-name">${escapeHtml(file.name)}</div>
-                <div class="preview-size">${formatBytes(file.size)}</div>
-            </div>
-        `;
-        previewWrap.classList.remove('hidden');
-    } else if (file.type.startsWith('audio/')) {
-        pendingMedia = { file, type: 'audio', name: file.name, size: file.size };
-        const url = URL.createObjectURL(file);
-        preview.innerHTML = `
-    <div style="font-size:40px;text-align:center;">${icon}</div>
-    <div class="preview-info">
-        <div class="preview-name">${escapeHtml(file.name)}</div>
-        <div class="preview-size">${formatBytes(file.size)}</div>
-        <div style="font-size:11px;color:var(--text-muted);">Document</div>
-    </div>
-`;
-        previewWrap.classList.remove('hidden');
-    } else {
-    
-        pendingMedia = { file, type: 'document', name: file.name, size: file.size };
-        const icon = getFileIcon(file.name);
-        preview.innerHTML = `
-    <div style="font-size:40px;text-align:center;">${icon}</div>
-    <div class="preview-info">
-        <div class="preview-name">${escapeHtml(file.name)}</div>
-        <div class="preview-size">${formatBytes(file.size)}</div>
-        <div style="font-size:11px;color:var(--text-muted);">Document</div>
-    </div>
-`;
-        previewWrap.classList.remove('hidden');
-    }
-    event.target.value = '';
+    renderMultiImagePreview(compressed);
+    event.target.value = ''; // Reset input
 }
 
 // ===== CLEAR PREVIEW =====
@@ -229,27 +276,89 @@ function clearMediaPreview() {
         document.getElementById('upload-progress').classList.add('hidden');
     }
 }
-function renderMediaBubble(m) {
-    if (!m.media_url) return '';
-    const type = m.media_type || 'document';
-    
 
-    const safeUrl = m.media_url.replace(/[^\x20-\x7E]/g, '');
+// ===== RENDER MULTI-IMAGE PREVIEW =====
+function renderMultiImagePreview(files) {
+    const preview = document.getElementById('preview-content');
+    if (!preview) return;
     
-    if (type === 'image') {
-        const src = (m.media_thumbnail || safeUrl).replace(/[^\x20-\x7E]/g, '');
+    if (files.length === 1) {
+        // Single image preview (existing behavior)
+        const reader = new FileReader();
+        reader.onload = e => {
+            preview.innerHTML = `
+                <img src="${e.target.result}" alt="preview">
+                <div class="preview-info">
+                    <div class="preview-name">${escapeHtml(files[0].name)}</div>
+                    <div class="preview-size">${formatBytes(files[0].size)}</div>
+                </div>
+            `;
+        };
+        reader.readAsDataURL(files[0]);
+    } else {
+        // Multi-image grid preview
+        const grid = document.createElement('div');
+        grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:4px;width:100%;';
+        
+        files.slice(0, 9).forEach((file, i) => {
+            const cell = document.createElement('div');
+            cell.style.cssText = 'aspect-ratio:1;border-radius:6px;overflow:hidden;position:relative;background:var(--bg-tertiary);';
+            
+            const img = document.createElement('img');
+            img.src = URL.createObjectURL(file);
+            img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+            
+            if (i === 8 && files.length > 9) {
+                const overlay = document.createElement('div');
+                overlay.style.cssText = 'position:absolute;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:14px;';
+                overlay.textContent = `+${files.length - 8}`;
+                cell.appendChild(img);
+                cell.appendChild(overlay);
+            } else {
+                cell.appendChild(img);
+            }
+            grid.appendChild(cell);
+        });
+        
+        preview.innerHTML = '';
+        preview.appendChild(grid);
+        
+        // Add info below grid
+        const info = document.createElement('div');
+        info.style.cssText = 'margin-top:8px;font-size:12px;color:var(--text-muted);';
+        info.textContent = `${files.length} photo${files.length > 1 ? 's' : ''} selected`;
+        preview.appendChild(info);
+    }
+    
+    document.getElementById('media-preview').classList.remove('hidden');
+}
+
+// ===== RENDER MEDIA BUBBLE (Supports Carousel) =====
+function renderMediaBubble(m) {
+    // Handle multiple images with carousel
+    if (m.images && m.images.length > 0) {
+        return createImageCarousel(m.images, m.id);
+    }
+    
+    // Single image (legacy)
+    if (m.media_type === 'image' && m.media_url) {
+        const safeUrl = (m.media_thumbnail || m.media_url).replace(/[^\x20-\x7E]/g, '');
         return `<div class="message-media" onclick="openMediaFullscreen('${safeUrl}', 'image')">
-            <img src="${src}" alt="media" loading="lazy" onerror="this.src='${safeUrl}'">
+            <img src="${safeUrl}" alt="media" loading="lazy" onerror="this.src='${safeUrl}'">
         </div>`;
     }
     
-    if (type === 'video') {
+    // Video
+    if (m.media_type === 'video' && m.media_url) {
+        const safeUrl = m.media_url.replace(/[^\x20-\x7E]/g, '');
         return `<div class="message-media" onclick="openMediaFullscreen('${safeUrl}', 'video')">
             <video src="${safeUrl}" preload="metadata" playsinline></video>
         </div>`;
     }
     
-    if (type === 'audio') {
+    // Audio
+    if (m.media_type === 'audio' && m.media_url) {
+        const safeUrl = m.media_url.replace(/[^\x20-\x7E]/g, '');
         return `<div class="message-media message-audio">
             <audio src="${safeUrl}" controls></audio>
             <div class="media-info">
@@ -259,26 +368,312 @@ function renderMediaBubble(m) {
         </div>`;
     }
     
+    // Document/File
+    if (m.media_url) {
+        const safeUrl = m.media_url.replace(/[^\x20-\x7E]/g, '');
+        const icon = getFileIcon(m.media_name);
+        const ext = (m.media_name || '').split('.').pop().toUpperCase();
+        const size = m.media_size ? formatBytes(m.media_size) : 'Unknown size';
+        
+        return `
+            <a href="${safeUrl}" target="_blank" download class="message-file message-document">
+                <div class="file-icon-large">${icon}</div>
+                <div class="file-info">
+                    <div class="file-name">${escapeHtml(m.media_name || 'File')}</div>
+                    <div class="file-meta">
+                        <span class="file-ext">${ext}</span>
+                        <span class="file-size">${size}</span>
+                    </div>
+                </div>
+                <div class="file-download">⬇️</div>
+            </a>
+        `;
+    }
+    
+    return '';
+}
 
-    const icon = getFileIcon(m.media_name);
-    const ext = (m.media_name || '').split('.').pop().toUpperCase();
-    const size = m.media_size ? formatBytes(m.media_size) : 'Unknown size';
+// ══════════════════════════════════════════════════════════════
+// 🖼️ MULTI-IMAGE CAROUSEL FUNCTIONS
+// ══════════════════════════════════════════════════════════════
+
+function createImageCarousel(images, msgId) {
+    if (!images || images.length === 0) return '';
+    if (images.length === 1) {
+        // Single image - simple view
+        return `<div class="message-media" onclick="openMediaFullscreen('${images[0]}', 'image')">
+            <img src="${images[0]}" alt="message image" loading="lazy">
+        </div>`;
+    }
+    
+    // Multi-image carousel
+    const carouselId = `carousel-${msgId}`;
+    const slides = images.map((url, i) => 
+        `<div class="carousel-slide" data-index="${i}">
+            <img src="${url}" alt="Image ${i+1}" loading="lazy" onclick="openCarouselFullscreen('${carouselId}', ${i})">
+        </div>`
+    ).join('');
+    
+    const dots = images.map((_, i) => 
+        `<button class="carousel-dot ${i === 0 ? 'active' : ''}" 
+                data-index="${i}" 
+                onclick="goToCarouselSlide('${carouselId}', ${i})"
+                aria-label="Go to image ${i+1}">
+        </button>`
+    ).join('');
     
     return `
-        <a href="${safeUrl}" target="_blank  " download class="message-file message-document">
-            <div class="file-icon-large">${icon}</div>
-            <div class="file-info">
-                <div class="file-name">${escapeHtml(m.media_name || 'File')}</div>
-                <div class="file-meta">
-                    <span class="file-ext">${ext}</span>
-                    <span class="file-size">${size}</span>
-                </div>
-            </div>
-            <div class="file-download">⬇️</div>
-        </a>
+        <div class="message-carousel" id="${carouselId}" data-current="0" data-total="${images.length}">
+            <div class="carousel-track">${slides}</div>
+            <button class="carousel-arrow carousel-prev" onclick="carouselStep('${carouselId}', -1)" aria-label="Previous image">❮</button>
+            <button class="carousel-arrow carousel-next" onclick="carouselStep('${carouselId}', 1)" aria-label="Next image">❯</button>
+            <div class="carousel-dots">${dots}</div>
+            <div class="carousel-counter">1 / ${images.length}</div>
+        </div>
     `;
 }
-attachMediaListeners();
+
+window.goToCarouselSlide = function(carouselId, index) {
+    const carousel = document.getElementById(carouselId);
+    if (!carousel) return;
+    
+    const total = parseInt(carousel.dataset.total);
+    const clamped = Math.max(0, Math.min(index, total - 1));
+    
+    carousel.dataset.current = clamped;
+    
+    // Update track position
+    const track = carousel.querySelector('.carousel-track');
+    if (track) {
+        track.style.transform = `translateX(-${clamped * 100}%)`;
+    }
+    
+    // Update dots
+    carousel.querySelectorAll('.carousel-dot').forEach((dot, i) => {
+        dot.classList.toggle('active', i === clamped);
+    });
+    
+    // Update counter
+    const counter = carousel.querySelector('.carousel-counter');
+    if (counter) {
+        counter.textContent = `${clamped + 1} / ${total}`;
+    }
+    
+    // Update arrow states
+    updateCarouselArrows(carousel, clamped, total);
+};
+
+window.carouselStep = function(carouselId, direction) {
+    const carousel = document.getElementById(carouselId);
+    if (!carousel) return;
+    
+    const current = parseInt(carousel.dataset.current);
+    goToCarouselSlide(carouselId, current + direction);
+};
+
+function updateCarouselArrows(carousel, currentIndex, total) {
+    const prevBtn = carousel.querySelector('.carousel-prev');
+    const nextBtn = carousel.querySelector('.carousel-next');
+    
+    if (prevBtn) prevBtn.disabled = currentIndex === 0;
+    if (nextBtn) nextBtn.disabled = currentIndex === total - 1;
+}
+
+window.openCarouselFullscreen = function(carouselId, startIndex) {
+    const carousel = document.getElementById(carouselId);
+    if (!carousel) return;
+    
+    const images = Array.from(carousel.querySelectorAll('.carousel-slide img')).map(img => img.src);
+    const total = images.length;
+    
+    // Create or reuse fullscreen modal
+    let modal = document.getElementById('carousel-fullscreen');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'carousel-fullscreen';
+        modal.className = 'carousel-fullscreen';
+        modal.innerHTML = `
+            <button class="carousel-close" onclick="closeCarouselFullscreen()">✕</button>
+            <div class="carousel-track"></div>
+            <button class="carousel-arrow carousel-prev" onclick="fullscreenCarouselStep(-1)">❮</button>
+            <button class="carousel-arrow carousel-next" onclick="fullscreenCarouselStep(1)">❯</button>
+            <div class="carousel-counter"></div>
+        `;
+        document.body.appendChild(modal);
+        
+        // Close on backdrop click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeCarouselFullscreen();
+        });
+        
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (!modal.classList.contains('active')) return;
+            if (e.key === 'ArrowLeft') fullscreenCarouselStep(-1);
+            if (e.key === 'ArrowRight') fullscreenCarouselStep(1);
+            if (e.key === 'Escape') closeCarouselFullscreen();
+        });
+    }
+    
+    // Populate slides
+    const track = modal.querySelector('.carousel-track');
+    track.innerHTML = images.map((url, i) => 
+        `<div class="carousel-slide"><img src="${url}" alt="Image ${i+1}"></div>`
+    ).join('');
+    
+    // Set initial slide
+    modal.dataset.current = startIndex;
+    modal.dataset.total = total;
+    goToFullscreenSlide(modal, startIndex);
+    
+    // Show modal
+    modal.classList.add('active');
+    document.body.style.overflow = 'hidden'; // Prevent background scroll
+};
+
+window.closeCarouselFullscreen = function() {
+    const modal = document.getElementById('carousel-fullscreen');
+    if (modal) {
+        modal.classList.remove('active');
+        document.body.style.overflow = '';
+    }
+};
+
+window.fullscreenCarouselStep = function(direction) {
+    const modal = document.getElementById('carousel-fullscreen');
+    if (!modal) return;
+    
+    const current = parseInt(modal.dataset.current);
+    const total = parseInt(modal.dataset.total);
+    const newIndex = Math.max(0, Math.min(current + direction, total - 1));
+    
+    goToFullscreenSlide(modal, newIndex);
+};
+
+function goToFullscreenSlide(modal, index) {
+    modal.dataset.current = index;
+    
+    // Update track
+    const track = modal.querySelector('.carousel-track');
+    if (track) {
+        track.style.transform = `translateX(-${index * 100}%)`;
+    }
+    
+    // Update counter
+    const counter = modal.querySelector('.carousel-counter');
+    const total = parseInt(modal.dataset.total);
+    if (counter) {
+        counter.textContent = `${index + 1} / ${total}`;
+    }
+    
+    // Update arrows
+    const prevBtn = modal.querySelector('.carousel-prev');
+    const nextBtn = modal.querySelector('.carousel-next');
+    if (prevBtn) prevBtn.disabled = index === 0;
+    if (nextBtn) nextBtn.disabled = index === total - 1;
+}
+
+function addCarouselSwipe(carousel) {
+    let startX = 0;
+    let isDragging = false;
+    
+    carousel.addEventListener('touchstart', (e) => {
+        startX = e.touches[0].clientX;
+        isDragging = true;
+    }, { passive: true });
+    
+    carousel.addEventListener('touchend', (e) => {
+        if (!isDragging) return;
+        const diff = startX - e.changedTouches[0].clientX;
+        
+        if (Math.abs(diff) > 50) { // Swipe threshold
+            carouselStep(carousel.id, diff > 0 ? 1 : -1);
+        }
+        isDragging = false;
+    }, { passive: true });
+}
+
+function initCarousels() {
+    document.querySelectorAll('.message-carousel').forEach(carousel => {
+        // Initialize arrows
+        const current = parseInt(carousel.dataset.current) || 0;
+        const total = parseInt(carousel.dataset.total) || 1;
+        updateCarouselArrows(carousel, current, total);
+        
+        // Add swipe support
+        addCarouselSwipe(carousel);
+        
+        // Add keyboard support for accessibility
+        carousel.setAttribute('tabindex', '0');
+        carousel.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') carouselStep(carousel.id, -1);
+            if (e.key === 'ArrowRight') carouselStep(carousel.id, 1);
+        });
+    });
+}
+
+// Override loadMessages to initialize carousels after rendering
+const originalLoadMessages = window.loadMessages;
+window.loadMessages = async function(username) {
+    await originalLoadMessages(username);
+    // Initialize carousels after messages load
+    setTimeout(initCarousels, 100);
+};
+
+// ===== ENHANCEMENTS =====
+function scrollToNewMessage(msgId) {
+    const msg = document.querySelector(`.message-item[data-msg-id="${msgId}"]`);
+    if (msg) {
+        msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        msg.style.animation = 'pulse 0.6s ease';
+        setTimeout(() => msg.style.animation = '', 600);
+    }
+}
+
+function showTypingIndicator(username) {
+    const status = document.getElementById('chat-status');
+    if (status && status.classList.contains('online')) {
+        const original = status.title || '';
+        status.title = `${username} is typing...`;
+        status.style.animation = 'pulse 1s infinite';
+        setTimeout(() => {
+            status.title = original;
+            status.style.animation = '';
+        }, 3000);
+    }
+}
+
+function markMessageDelivered(msgId) {
+    const msg = document.querySelector(`.message-item[data-msg-id="${msgId}"] .message-time`);
+    if (msg && !msg.textContent.includes('✓✓')) {
+        msg.textContent += ' ✓✓';
+        msg.style.color = 'var(--accent)';
+    }
+}
+
+function showMediaLoading() {
+    const progress = document.getElementById('upload-progress');
+    if (progress) {
+        progress.classList.remove('hidden');
+        const fill = progress.querySelector('.progress-fill');
+        const text = progress.querySelector('.progress-text');
+        let p = 0;
+        const interval = setInterval(() => {
+            p = Math.min(p + Math.random() * 15, 95);
+            if (fill) fill.style.width = `${p}%`;
+            if (text) text.textContent = `${Math.round(p)}%`;
+            if (p >= 95) clearInterval(interval);
+        }, 200);
+        return () => {
+            clearInterval(interval);
+            if (fill) fill.style.width = '100%';
+            if (text) text.textContent = '100%';
+            setTimeout(() => progress.classList.add('hidden'), 300);
+        };
+    }
+    return () => {};
+}
+
 // ===== SCROLL =====
 function scrollToBottom(force = false) {
     const container = document.getElementById("messages-container");
@@ -506,6 +901,8 @@ window.selectReaction = async function (msgId, emoji) {
         if (currentChatUser) loadMessages(currentChatUser);
     }
 };
+
+// ===== DELETE CONFIRMATION =====
 function confirmDelete(msgId, deleteScope = 'me') {
     document.querySelectorAll('.delete-confirm-modal').forEach(el => el.remove());
    
@@ -606,7 +1003,8 @@ function confirmDelete(msgId, deleteScope = 'me') {
         };
     });
 }
-// ===== LOAD MESSAGES (WITH MEDIA SUPPORT) =====
+
+// ===== LOAD MESSAGES (WITH MEDIA + CAROUSEL SUPPORT) =====
 async function loadMessages(username) {
     const token = localStorage.getItem("token");
     if (!token || !username) return;
@@ -654,39 +1052,35 @@ async function loadMessages(username) {
                 reactionsHtml += '</div>';
             }
             
-            // ✅ Media bubble content
+            // ✅ Media bubble content (supports carousel)
             const isMine = m.is_mine;
-            const token = localStorage.getItem('token');
+            const contentHtml = m.content ? `<div class="message-text">${escapeHtml(m.content)}</div>` : '';
+            const mediaHtml = renderMediaBubble(m);
+            const hasMedia = !!(m.media_url || (m.images && m.images.length > 0));
 
+            const menuHtml = `
+                <div class="msg-options-menu">
+                    <button data-action="reply"><span><img width="15px" src="reply.png"></span> Reply</button>
+                    <button data-action="react"><span><img width="15px" src="emoji.png"></span> Add Reaction</button>
+                    ${isMine ? `<button data-action="edit"><span><img width="15px" src="pencil.png"></span> Edit</button>` : ''}
+                    <button data-action="delete-me"><span><img width="15px" src="trash.png"></span> Delete for me</button>
+                    ${isMine ? `<button data-action="delete-all" class="danger"><span>🌍</span> Delete for everyone</button>` : ''}
+                </div>`;
 
-const contentHtml = m.content ? `<div class="message-text">${escapeHtml(m.content)}</div>` : '';
-const mediaHtml = m.media_url ? renderMediaBubble(m) : '';
-const hasMedia = !!m.media_url;
-
-const menuHtml = `
-    <div class="msg-options-menu">
-        <button data-action="reply"><span><img width="15px" src="reply.png"></span> Reply</button>
-        <button data-action="react"><span><img width="15px" src="emoji.png"></span> Add Reaction</button>
-        ${isMine ? `<button data-action="edit"><span><img width="15px" src="pencil.png"></span> Edit</button>` : ''}
-        <button data-action="delete-me"><span><img width="15px" src="trash.png"></span> Delete for me</button>
-        ${isMine ? `<button data-action="delete-all" class="danger"><span>🌍</span> Delete for everyone</button>` : ''}
-    </div>`;
-
-msgEl.innerHTML = `
-    <img src="${getSafePic(m.sender_picture)}" class="message-avatar">
-    <div class="message-wrapper">
-        <div class="message-bubble ${hasMedia ? '' : 'text-only'}" ${!hasMedia ? `onclick="handleTextBubbleClick(event, this)"` : ''}>
-            ${hasMedia ? `<button class="msg-options-btn" onclick="toggleMediaMenu(event, this)">⋮</button>` : ''}
-            ${menuHtml}
-            ${replyHtml}
-            ${contentHtml}
-            ${mediaHtml}
-           
-        </div>
-         <div id="reactions-${msgId}" class="message-reactions">${reactionsHtml}</div>
-        <div class="message-time">${getTimeAgo(m.created_at)}${m.is_edited ? ' • edited' : ''}</div>
-    </div>`;
-container.appendChild(msgEl);
+            msgEl.innerHTML = `
+                <img src="${getSafePic(m.sender_picture)}" class="message-avatar">
+                <div class="message-wrapper">
+                    <div class="message-bubble ${hasMedia ? '' : 'text-only'}" ${!hasMedia ? `onclick="handleTextBubbleClick(event, this)"` : ''}>
+                        ${hasMedia ? `<button class="msg-options-btn" onclick="toggleMediaMenu(event, this)">⋮</button>` : ''}
+                        ${menuHtml}
+                        ${replyHtml}
+                        ${contentHtml}
+                        ${mediaHtml}
+                    </div>
+                    <div id="reactions-${msgId}" class="message-reactions">${reactionsHtml}</div>
+                    <div class="message-time">${getTimeAgo(m.created_at)}${m.is_edited ? ' • edited' : ''}</div>
+                </div>`;
+            container.appendChild(msgEl);
         } else {
             // Update existing message
             const bubble = msgEl.querySelector('.message-bubble');
@@ -719,10 +1113,10 @@ container.appendChild(msgEl);
                     }
                 } else if (contentDiv) contentDiv.remove();
                 
-                // Update media
-                const existingMedia = bubble.querySelector('.message-media, .message-file');
-                if (m.media_url) {
-                    const newMediaHtml = renderMediaBubble(m);
+                // Update media (supports carousel)
+                const existingMedia = bubble.querySelector('.message-media, .message-file, .message-carousel');
+                const newMediaHtml = renderMediaBubble(m);
+                if (newMediaHtml) {
                     if (existingMedia) {
                         existingMedia.outerHTML = newMediaHtml;
                     } else {
@@ -730,7 +1124,9 @@ container.appendChild(msgEl);
                         temp.innerHTML = newMediaHtml;
                         bubble.appendChild(temp.firstElementChild);
                     }
-                } else if (existingMedia) existingMedia.remove();
+                } else if (existingMedia) {
+                    existingMedia.remove();
+                }
                 
                 // Update time
                 if (time && time.textContent !== newTime + (m.is_edited ? ' • edited' : '')) {
@@ -776,8 +1172,37 @@ async function sendTextMessage(content) {
     if (!data || data.msg !== "sent") throw new Error("send failed");
 }
 
-// ===== SEND MEDIA MESSAGE =====
+// ===== SEND MEDIA MESSAGE (Supports Multi-Image) =====
 async function sendMediaMessage(content, media) {
+    const token = localStorage.getItem("token");
+    
+    // ✅ Handle multi-image via NEW endpoint
+    if (media?.type === 'multi-image' && media.files?.length > 0) {
+        // Upload all images to Cloudinary
+        const uploadPromises = media.files.map(f => uploadToCloudinary(f));
+        const imageUrls = await Promise.all(uploadPromises);
+        
+        // Send via new endpoint
+        const formData = new FormData();
+        formData.append("receiver_username", currentChatUser);
+        if (content) formData.append("content", content);
+        formData.append("images_json", JSON.stringify(imageUrls));
+        if (currentReply) formData.append("reply_to_id", currentReply.msgId);
+        
+        const response = await fetch("/send_multi_image_message", {
+            method: "POST",
+            headers: { "Authorization": "Bearer " + token },
+            body: formData
+        });
+        
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.msg || "upload failed");
+        }
+        return await response.json();
+    }
+    
+    // ✅ Original single-media handling (unchanged)
     const formData = new FormData();
     formData.append("receiver_username", currentChatUser);
     if (content) formData.append("content", content);
@@ -797,7 +1222,6 @@ async function sendMediaMessage(content, media) {
         if (progressText) progressText.textContent = `${Math.round(progress)}%`;
     }, 200);
     
-    const token = localStorage.getItem("token");
     const response = await fetch("/send_media_message", {
         method: "POST",
         headers: { "Authorization": "Bearer " + token },
@@ -860,6 +1284,8 @@ async function sendChatMessage() {
         if (sendBtn) sendBtn.disabled = false;
     }
 }
+
+// ===== LOAD CONVERSATIONS =====
 async function loadConversationsOptimized() {
     const token = localStorage.getItem("token");
     if (!token) return;
@@ -874,7 +1300,7 @@ async function loadConversationsOptimized() {
     data.forEach(c => {
         activeUsernames.add(c.username);
         const hasUnread = c.unread_count > 0;
-        const isOnline = c.is_online === true; // ✅ Parse backend boolean
+        const isOnline = c.is_online === true;
         let item = list.querySelector(`.conversation-item[data-username="${c.username}"]`);
         const previewText = c.last_message ? (c.last_message_from_me ? `You: ${c.last_message}` : c.last_message) : "Tap to chat";
         
@@ -883,7 +1309,6 @@ async function loadConversationsOptimized() {
             item.dataset.username = c.username;
             item.className = `conversation-item ${currentChatUser === c.username ? "active" : ""} ${hasUnread ? "has-unread" : ""}`;
             item.onclick = () => openChat(c.username);
-            // ✅ Added avatar wrapper + status dot
             item.innerHTML = `
                 <div class="conv-avatar-wrapper">
                     <img src="${getSafePic(c.profile_picture)}" class="conversation-avatar">
@@ -905,7 +1330,6 @@ async function loadConversationsOptimized() {
             list.appendChild(item);
         }
         
-        // ✅ Update status dynamically on refresh
         const statusDot = item.querySelector('.conv-status-dot');
         if (statusDot) statusDot.className = `conv-status-dot ${isOnline ? 'online' : 'offline'}`;
         
@@ -922,6 +1346,8 @@ async function loadConversationsOptimized() {
         if (!activeUsernames.has(item.dataset.username)) item.remove(); 
     });
 }
+
+// ===== UPDATE CHAT HEADER STATUS =====
 async function updateChatHeaderStatus(username) {
     if (!username) return;
     const token = localStorage.getItem("token");
@@ -938,6 +1364,8 @@ async function updateChatHeaderStatus(username) {
         statusEl.className = "chat-status offline";
     }
 }
+
+// ===== OPEN CHAT =====
 function openChat(username) {
     currentChatUser = username;
     const emptyState = document.getElementById("empty-state");
@@ -946,7 +1374,7 @@ function openChat(username) {
     if (chatActive) chatActive.classList.remove("hidden");
     document.getElementById("chat-username").textContent = username;
     
-    updateChatHeaderStatus(username); // ✅ ADD THIS LINE
+    updateChatHeaderStatus(username);
 
     const newBtn = document.getElementById("new-chat-btn");
     const emptyBtn = document.getElementById("empty-start-btn");
@@ -957,14 +1385,16 @@ function openChat(username) {
     if (chatPollInterval) clearInterval(chatPollInterval);
     chatPollInterval = setInterval(() => {
         loadMessages(username);
-        updateChatHeaderStatus(username); // ✅ ADD THIS LINE
+        updateChatHeaderStatus(username);
     }, 5000);
     
     if (window.innerWidth <= 1024) document.querySelector('.conversations-sidebar')?.classList.add('mobile-hidden');
     document.querySelectorAll(".conversation-item").forEach(el => { 
         el.classList.toggle("active", el.querySelector(".conversation-name")?.textContent === username); 
     });
-}   
+}
+
+// ===== EXIT CHAT =====
 function exitChat() {
     currentChatUser = null;
     const emptyState = document.getElementById("empty-state");
@@ -1059,6 +1489,7 @@ function stopSmartRefresh() {
     smartRefresh.active = false;
 }
 
+// ===== EDIT MESSAGE =====
 function editMsg(msgId, numericId, originalContent) {
     const msgItem = document.querySelector(`.message-item[data-msg-id="${msgId}"]`);
     if (!msgItem || msgItem.querySelector('.edit-message-input')) return;
@@ -1066,12 +1497,10 @@ function editMsg(msgId, numericId, originalContent) {
     const bubble = msgItem.querySelector('.message-bubble');
     if (!bubble) return;
     
-   
     let textEl = bubble.querySelector('.message-text');
     const currentText = textEl ? textEl.textContent.trim() : (originalContent || "");
     bubble.dataset.originalText = currentText;
     
-   
     const textarea = document.createElement('textarea');
     textarea.className = 'edit-message-input';
     textarea.value = currentText;
@@ -1079,12 +1508,10 @@ function editMsg(msgId, numericId, originalContent) {
     if (textEl) {
         textEl.replaceWith(textarea);
     } else {
-        
         bubble.insertBefore(textarea, bubble.firstChild);
     }
     textarea.focus();
     
-   
     const btnBox = document.createElement('div');
     btnBox.className = 'edit-actions';
     btnBox.innerHTML = `<button class="edit-cancel-btn">Cancel</button><button class="edit-save-btn">Save</button>`;
@@ -1131,7 +1558,6 @@ function editMsg(msgId, numericId, originalContent) {
             }
             newTextEl.textContent = newContent;
             
-         
             const timeEl = msgItem.querySelector('.message-time');
             if (timeEl && !timeEl.textContent.includes('edited')) {
                 timeEl.textContent += ' • edited';
@@ -1144,6 +1570,7 @@ function editMsg(msgId, numericId, originalContent) {
         }
     };
 }
+
 async function saveEdit(msgId, numericId) {
     const bubble = document.querySelector(`.message-item[data-msg-id="${msgId}"] .message-bubble`);
     if (!bubble) return;
@@ -1191,16 +1618,17 @@ async function saveEdit(msgId, numericId) {
         cancelEdit(msgId);
     }
 }
-// ===== GLOBAL STATE =====
 
+// ===== GLOBAL STATE =====
 let fullscreenVideoModal = null;
+let activeMenu = null;
+let activeConvMenu = null;
 
 // ===== TOGGLE OPTIONS MENU =====
 window.toggleMessageMenu = function(btn) {
     const menu = btn.nextElementSibling;
     const isShowing = menu.classList.contains('show');
     
-    // Close any open menu
     document.querySelectorAll('.msg-options-menu.show').forEach(m => m.classList.remove('show'));
     activeMenu = null;
     
@@ -1210,16 +1638,6 @@ window.toggleMessageMenu = function(btn) {
     }
     event.stopPropagation();
 };
-
-// ===== CLOSE MENU ON OUTSIDE CLICK =====
-document.addEventListener('click', (e) => {
-    if (activeMenu && !e.target.closest('.msg-options-menu') && !e.target.closest('.msg-options-btn')) {
-        activeMenu.classList.remove('show');
-        activeMenu = null;
-    }
-});
-// ===== GLOBAL STATE =====
-let activeMenu = null;
 
 // ===== TOGGLE MENU FOR MEDIA MESSAGES =====
 window.toggleMediaMenu = function(e, btn) {
@@ -1248,56 +1666,12 @@ document.addEventListener('click', (e) => {
         activeMenu.classList.remove('show');
         activeMenu = null;
     }
+    if (activeConvMenu && !e.target.closest('.conv-options-menu') && !e.target.closest('.conv-options-btn')) {
+        activeConvMenu.classList.remove('show');
+        activeConvMenu = null;
+    }
 });
 
-// ===== MENU ACTION ROUTER =====
-document.addEventListener('click', (e) => {
-    const btn = e.target.closest('.msg-options-menu button');
-    if (!btn) return;
-    const menu = btn.closest('.msg-options-menu');
-    const msgItem = menu.closest('.message-item');
-    const bubble = menu.closest('.message-bubble');
-    const msgId = msgItem.dataset.msgId;
-    
-    const action = btn.dataset.action;
-    menu.classList.remove('show');
-    activeMenu = null;
-    
-    if (action === 'reply') setReply(msgId);
-    else if (action === 'react') {
-        // Find the bubble's media or use a fallback target for emoji picker
-        const target = bubble.querySelector('.message-media') || bubble;
-        toggleEmojiPicker(msgId, target);
-    }
-    else if (action === 'edit') {
-        const content = bubble.querySelector('.message-text')?.textContent?.trim() || '';
-        editMsg(msgId, msgId.replace('id-',''), content);
-    }
-    else if (action === 'delete-me') confirmDelete(msgId, 'me');
-    else if (action === 'delete-all') confirmDelete(msgId, 'everyone');
-    e.stopPropagation();
-});
-
-// ===== FULLSCREEN MEDIA VIEWER =====
-window.openMediaFullscreen = function(url, type) {
-    let modal = document.getElementById('media-fullscreen');
-    if (!modal) {
-        modal = document.createElement('div');
-        modal.id = 'media-fullscreen';
-        modal.className = 'media-fullscreen';
-        modal.innerHTML = `<button class="media-close-btn">✕</button><div class="media-container"></div>`;
-        document.body.appendChild(modal);
-        modal.querySelector('.media-close-btn').onclick = () => modal.classList.remove('active');
-        modal.addEventListener('click', (e) => { if(e.target === modal) modal.classList.remove('active'); });
-    }
-    const container = modal.querySelector('.media-container');
-    if (type === 'video') {
-        container.innerHTML = `<video src="${url}" controls playsinline autoplay style="max-width:100vw;max-height:100vh;"></video>`;
-    } else {
-        container.innerHTML = `<img src="${url}" style="max-width:100vw;max-height:100vh;object-fit:contain;cursor:zoom-out;" onclick="document.getElementById('media-fullscreen').classList.remove('active')">`;
-    }
-    modal.classList.add('active');
-};
 // ===== MENU ACTION ROUTER =====
 document.addEventListener('click', (e) => {
     const btn = e.target.closest('.msg-options-menu button');
@@ -1325,6 +1699,27 @@ document.addEventListener('click', (e) => {
     e.stopPropagation();
 });
 
+// ===== FULLSCREEN MEDIA VIEWER =====
+window.openMediaFullscreen = function(url, type) {
+    let modal = document.getElementById('media-fullscreen');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'media-fullscreen';
+        modal.className = 'media-fullscreen';
+        modal.innerHTML = `<button class="media-close-btn">✕</button><div class="media-container"></div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('.media-close-btn').onclick = () => modal.classList.remove('active');
+        modal.addEventListener('click', (e) => { if(e.target === modal) modal.classList.remove('active'); });
+    }
+    const container = modal.querySelector('.media-container');
+    if (type === 'video') {
+        container.innerHTML = `<video src="${url}" controls playsinline autoplay style="max-width:100vw;max-height:100vh;"></video>`;
+    } else {
+        container.innerHTML = `<img src="${url}" style="max-width:100vw;max-height:100vh;object-fit:contain;cursor:zoom-out;" onclick="document.getElementById('media-fullscreen').classList.remove('active')">`;
+    }
+    modal.classList.add('active');
+};
+
 // ===== FULLSCREEN VIDEO PLAYER =====
 window.openFullscreenVideo = function(videoUrl, senderName) {
     if (!fullscreenVideoModal) {
@@ -1337,7 +1732,6 @@ window.openFullscreenVideo = function(videoUrl, senderName) {
         `;
         document.body.appendChild(fullscreenVideoModal);
         
-        // Close handlers
         fullscreenVideoModal.querySelector('.video-fullscreen-close').onclick = closeFullscreenVideo;
         fullscreenVideoModal.addEventListener('click', (e) => { if(e.target === fullscreenVideoModal) closeFullscreenVideo(); });
     }
@@ -1372,50 +1766,13 @@ function attachMediaListeners() {
         }
     });
 }
-// ===== DOMContentLoaded =====
-document.addEventListener("DOMContentLoaded", async function () {
-    const token = localStorage.getItem("token");
-    if (!token) return window.location.href = "/root.html";
-    
-    const p = document.getElementById("profile-img"); 
-    if (p) p.src = getSafePic(localStorage.getItem("profile_picture"));
-    
-    await loadFriendsList();
-    await loadConversationsOptimized();
-    
-    document.getElementById("search-input")?.addEventListener("input", e => filterConversations(e.target.value));
-    startSmartRefresh();
-    setupScrollListener();
-    
-    const container = document.getElementById("messages-container");
-    if (container) { 
-        container.addEventListener("click", handleMessageActions); 
-        container.addEventListener("click", closeEmojiPickers); 
-    }
-    
-    document.getElementById("new-chat-btn")?.addEventListener("click", openNewChatModal);
-    document.getElementById("empty-start-btn")?.addEventListener("click", openNewChatModal);
-    document.getElementById("close-reply-btn")?.addEventListener("click", cancelReply);
-    
-    // Media input handler
-    document.getElementById("media-input")?.addEventListener("change", handleMediaSelect);
-    
-    setupMessageInteractions();
-});
 
-document.addEventListener("visibilitychange", () => { 
-    if (document.hidden) stopSmartRefresh(); 
-    else { loadFriendsList(); loadConversationsOptimized(); startSmartRefresh(); } 
-});
 // ===== CONVERSATION OPTIONS =====
-let activeConvMenu = null;
-
 window.toggleConvMenu = function(e, btn) {
     e.stopPropagation();
     const menu = btn.nextElementSibling;
     const isOpen = menu.classList.contains('show');
     
-    // Close any open menu
     document.querySelectorAll('.conv-options-menu.show').forEach(m => {
         if (m !== menu) m.classList.remove('show');
     });
@@ -1428,14 +1785,6 @@ window.toggleConvMenu = function(e, btn) {
         activeConvMenu = null;
     }
 };
-
-// Close menu on outside click
-document.addEventListener('click', (e) => {
-    if (activeConvMenu && !e.target.closest('.conv-options-menu') && !e.target.closest('.conv-options-btn')) {
-        activeConvMenu.classList.remove('show');
-        activeConvMenu = null;
-    }
-});
 
 // Handle conversation menu actions
 document.addEventListener('click', (e) => {
@@ -1501,7 +1850,6 @@ function confirmDeleteConversation(username, scope, convItem) {
             
             close();
             
-            // Remove conversation from UI
             if (convItem) {
                 convItem.style.transition = "all 0.3s ease";
                 convItem.style.opacity = "0";
@@ -1509,14 +1857,11 @@ function confirmDeleteConversation(username, scope, convItem) {
                 setTimeout(() => convItem.remove(), 300);
             }
             
-            // If this was the active chat, exit it
             if (currentChatUser === username) {
                 exitChat();
             }
             
             showToast(scope === 'me' ? "Conversation hidden" : "Conversation deleted for everyone", "success");
-            
-            // Refresh conversations list
             loadConversationsOptimized();
             
         } catch (err) {
@@ -1525,4 +1870,87 @@ function confirmDeleteConversation(username, scope, convItem) {
         }
     };
 }
+
+// ===== DOMContentLoaded =====
+document.addEventListener("DOMContentLoaded", async function () {
+    const token = localStorage.getItem("token");
+    if (!token) return window.location.href = "/root.html";
+    
+    const p = document.getElementById("profile-img"); 
+    if (p) p.src = getSafePic(localStorage.getItem("profile_picture"));
+    
+    await loadFriendsList();
+    await loadConversationsOptimized();
+    
+    document.getElementById("search-input")?.addEventListener("input", e => filterConversations(e.target.value));
+    startSmartRefresh();
+    setupScrollListener();
+    
+    const container = document.getElementById("messages-container");
+    if (container) { 
+        container.addEventListener("click", handleMessageActions); 
+        container.addEventListener("click", closeEmojiPickers); 
+    }
+    
+    document.getElementById("new-chat-btn")?.addEventListener("click", openNewChatModal);
+    document.getElementById("empty-start-btn")?.addEventListener("click", openNewChatModal);
+    document.getElementById("close-reply-btn")?.addEventListener("click", cancelReply);
+    
+    // Media input handler - enable multiple selection
+    const mediaInput = document.getElementById("media-input");
+    if (mediaInput) {
+        mediaInput.setAttribute('multiple', '');
+        mediaInput.setAttribute('accept', 'image/*');
+        mediaInput.addEventListener("change", handleMediaSelect);
+    }
+    
+    setupMessageInteractions();
+    
+    // Add smooth hover/tap effects
+    document.querySelectorAll('.conversation-item').forEach(item => {
+        item.addEventListener('mouseenter', function() {
+            this.style.transform = 'translateX(4px)';
+        });
+        item.addEventListener('mouseleave', function() {
+            this.style.transform = '';
+        });
+    });
+    
+    document.querySelectorAll('.message-bubble, .friend-item, .modal-user-item').forEach(el => {
+        el.addEventListener('touchstart', function() {
+            this.style.transform = 'scale(0.98)';
+        });
+        el.addEventListener('touchend', function() {
+            this.style.transform = '';
+        });
+    });
+    
+    // Auto-focus chat input when chat opens
+    const chatInput = document.getElementById('chat-input');
+    if (chatInput) {
+        const observer = new MutationObserver(() => {
+            if (!document.getElementById('empty-state')?.classList.contains('hidden')) {
+                chatInput.focus();
+            }
+        });
+        observer.observe(document.getElementById('chat-active'), { attributes: true, attributeFilter: ['class'] });
+    }
+});
+
+document.addEventListener("visibilitychange", () => { 
+    if (document.hidden) stopSmartRefresh(); 
+    else { loadFriendsList(); loadConversationsOptimized(); startSmartRefresh(); } 
+});
+
 window.addEventListener("beforeunload", stopSmartRefresh);
+
+// Export for potential WebSocket integration later
+window.MessagingEnhancements = {
+    scrollToNewMessage,
+    showTypingIndicator,
+    markMessageDelivered,
+    showMediaLoading,
+    uploadToCloudinary,
+    createImageCarousel,
+    initCarousels
+};
