@@ -4,14 +4,29 @@
     <meta charset="UTF-8">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="signup.css">
+    
     <script src="login.js"></script>
     <title>Social Grid - Sign Up</title>
     <style>
-        .ic { cursor: pointer; vertical-align: middle; margin-left: -25px; position: relative; z-index: 1; }
-        .inbox { position: relative; display: inline-block; }
+        /* ✅ ONLY INBOX/IC STYLES - MINIMAL FIX */
+        .ic { 
+            cursor: pointer; 
+            vertical-align: middle; 
+            position: relative; 
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .inbox { 
+            position: relative; 
+            display: flex;
+            align-items: center;
+        }
     </style>
 </head>
+
 <body>
     <nav class="navbar" id="pc">
         <div class="logo"><img src="logo.png" alt="" width="300px" style="margin-top: 80px;"></div>
@@ -35,17 +50,22 @@
             <input type="text" placeholder="your username" id="name" class="user" onfocus="clear()" name="name"><br>
             <p class="error" id="nameerror"></p><br>
             
+            <!-- ✅ ONLY INBOX STRUCTURE - NO DESIGN CHANGE -->
             <div class="inbox">
-                <input type="password" placeholder="password" class="password" id="password" name="password" onfocus="clear(); hide()" style="padding-right: 25px;">
-                <img src="open.png" class="ic" id="ic" width="20px" style="display:none;" onclick="show()">
+                <input type="password" placeholder="password" class="password" id="password" name="password">
+                <div class="ic" id="ic" >
+                    <img src="open.png" width="20px" onclick="show()" id="ii1" alt="👁️">
+                </div>
                 <p class="error" id="passworderror"></p>
             </div><br><br>
             
             <div class="inbox">
-                <input type="password" class="password" placeholder="retype your password" id="repassword" name="repassword"onfocus="clear(); hide1()" style="padding-right: 25px;">
-                <img src="open.png" class="ic" id="ic2" width="20px" style="display:none;" onclick="show1()">
+                <input type="password" class="password" placeholder="retype your password" id="repassword" name="repassword">
+                <div class="ic" id="ic2" >
+                    <img src="open.png" onclick="show1()" id="ii" width="20px" alt="👁️">
+                </div>
                 <p class="error" id="repassworderror"></p>
-            </div><br>
+            </div><br><br><br>
             
             <div class="social-login-container">
                 <div class="separator"><span>or continue with</span></div>
