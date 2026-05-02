@@ -2351,6 +2351,86 @@ body {
 
 /* ===== MOBILE: FIX INPUT WRAP BEHIND BROWSER BAR ===== */
 @media (max-width: 768px) {
+    
+    /* Document Files - Full width on mobile */
+    .message-document {
+        min-width: 100% !important;
+        max-width: 100% !important;
+        width: 100% !important;
+        box-sizing: border-box;
+        padding: 12px 14px !important;
+        gap: 10px !important;
+    }
+    
+    .message-document .file-icon-large {
+        width: 36px !important;
+        height: 36px !important;
+        font-size: 28px !important;
+        flex-shrink: 0;
+    }
+    
+    .message-document .file-name {
+        font-size: 12px !important;
+        max-width: 180px !important;
+    }
+    
+    .message-document .file-meta {
+        gap: 6px !important;
+        flex-wrap: wrap !important;
+    }
+    
+    .message-document .file-ext {
+        padding: 2px 6px !important;
+        font-size: 9px !important;
+    }
+    
+    .message-document .file-size {
+        font-size: 10px !important;
+    }
+    
+    .message-document .file-download {
+        width: 26px !important;
+        height: 26px !important;
+        font-size: 18px !important;
+    }
+    
+    /* Audio Player - Full width on mobile */
+    .message-audio {
+        min-width: 100% !important;
+        max-width: 100% !important;
+        width: 100% !important;
+        padding: 10px !important;
+        box-sizing: border-box;
+    }
+    
+    .message-audio audio {
+        width: 100% !important;
+        height: 32px !important; /* Smaller player on mobile */
+    }
+    
+    .message-audio .media-info {
+        font-size: 11px !important;
+        flex-wrap: wrap !important;
+        gap: 4px !important;
+    }
+    
+    /* Message bubbles with media - adjust max-width on mobile */
+    .message-item {
+        max-width: 90% !important;
+    }
+    
+    /* Ensure media inside bubbles scales properly */
+    .message-media {
+        max-width: 100% !important;
+    }
+    
+    .message-media img,
+    .message-media video {
+        max-height: 250px !important; /* Slightly smaller on mobile */
+    }
+
+
+
     .chat-main {
         height: 100dvh !important;
         display: flex !important;
@@ -2399,7 +2479,35 @@ body {
         font-size: 16px !important;
     }
 }
-
+@media (max-width: 400px) {
+    .message-document {
+        padding: 10px !important;
+        gap: 8px !important;
+    }
+    
+    .message-document .file-name {
+        font-size: 11px !important;
+        max-width: 140px !important;
+    }
+    
+    .message-document .file-icon-large {
+        width: 32px !important;
+        height: 32px !important;
+        font-size: 24px !important;
+    }
+    
+    .message-audio {
+        padding: 8px !important;
+    }
+    
+    .message-audio audio {
+        height: 28px !important;
+    }
+    
+    .message-item {
+        max-width: 95% !important;
+    }
+}
 @media (max-width: 400px) {
     .chat-input-wrap {
         padding: 10px 12px !important;
@@ -2425,7 +2533,8 @@ body {
 }
 
 /* ===== CURSOR HINTS ===== */
-.message-bubble.text-only { cursor: pointer; }
+.message-bubble.text-only { cursor: pointer; 
+width: 200px;}
 .message-media { cursor: pointer; }
 .conversation-item { cursor: pointer; }
 .friend-item { cursor: pointer; }
