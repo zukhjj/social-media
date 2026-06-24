@@ -11,7 +11,11 @@ let currentEditContent = "";
 let currentEditImage = "";
 let currentEditVideo = null;
 let currentEditVisibility = "public";
-
+// ─────────────────────── INFINITE SCROLL STATE ───────────────
+let currentPage = 1;
+const postsPerPage = 20;
+let isLoadingMore = false;
+let hasMorePosts = true;
 // ─────────────────────── UTILITIES ───────────────────────────
 function getSafePic(pic) {
     return (pic && pic !== "unknown" && pic !== "unkown") ? pic : "unkown.png";
@@ -506,12 +510,24 @@ function addSliderSwipe(slider) {
     });
     slider.addEventListener("mouseleave", () => { mouseDragging = false; });
 }
-
 // ─────────────────────── FEED ────────────────────────────────
 function visIcon(v) {
     return { public: "🌍", friends: "👥", private: "🔒" }[v] || "🌍";
 }
-
+function video() {
+    v=document.getElementById("v")
+    if (v.controls == true){
+        
+        v.controls = false;
+        if (v.paused) {
+            v.play()
+        }
+       
+    }else{
+        v.pause()
+        v.controls = true;
+    }
+}
 function createPostHTML(p) {
     const onUserPage = !!document.getElementById("user-posts-feed");
     const currentUsername = localStorage.getItem("username") || "";
@@ -534,7 +550,7 @@ function createPostHTML(p) {
     let mediaHtml = "";
     const images = p.images || (p.image ? [p.image] : []);
     if (p.video) {
-        mediaHtml = `<video controls preload="metadata" playsinline>
+        mediaHtml = `<video id='v' preload="metadata"  autoplay loop muted playsinline onclick='video()'>
             <source src="${p.video}" type="video/mp4">
             Your browser doesn't support video.
         </video>`;
@@ -568,6 +584,12 @@ function createPostHTML(p) {
                 <img src="repost.png" class="action-icon">
                 <span class="action-count">${p.reposts || 0}</span>
             </button>
+                        <!-- ✅ SMART SAVE BUTTON (Reads p.is_saved to auto-apply gold style) -->
+            <button class="${p.is_saved ? 'action-btn save-btn active' : 'action-btn save-btn'}" data-post-id="${p.id}" onclick="event.stopPropagation(); toggleSavePost(${p.id}, this)" title="Save Post">
+                <svg viewBox="0 0 24 24" fill="${p.is_saved ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path>
+                </svg>
+            </button>
         </div>
         <div id="comments-section-${p.id}" class="comment-container">
             <div id="comments-list-${p.id}" class="comments-list"></div>
@@ -591,9 +613,14 @@ function showSkeletons(count = 3) {
         feed.appendChild(sk);
     }
 }
-
 async function loadPosts() {
     if (isMessagesPage) return;
+    
+    // ✅ Reset pagination state
+    currentPage = 1;
+    hasMorePosts = true;
+    isLoadingMore = false;
+
     const token = localStorage.getItem("token");
     const currentUsername = localStorage.getItem("username") || "";
 
@@ -606,8 +633,10 @@ async function loadPosts() {
     } catch (_) {}
 
     try {
-        const res = await fetch("/get_posts", {
-            headers: { "Authorization": "Bearer " + (token || "") }
+        // ✅ Explicitly fetch page 1 with 20 posts
+        const res = await fetch(`/get_posts?page=1&per_page=${postsPerPage}`, {
+            headers: { "Authorization": "Bearer " + (token || "") },
+            cache: "no-store"
         });
         if (!res.ok) throw new Error("Failed to fetch posts");
         const allPosts = await res.json();
@@ -620,12 +649,13 @@ async function loadPosts() {
         if (addDiv) feed.appendChild(addDiv);
 
         if (!posts.length) {
-            feed.innerHTML += `
-                <div class="empty-state">
-                    <div class="empty-state-icon">👋</div>
-                    No posts yet. Follow someone to see their posts!
-                </div>`;
+            feed.innerHTML += `<div class="empty-state"><div class="empty-state-icon">👋</div>No posts yet. Follow someone to see their posts!</div>`;
             return;
+        }
+
+        // ✅ Check if we have reached the end of the feed on the very first load
+        if (posts.length < postsPerPage) {
+            hasMorePosts = false;
         }
 
         posts.forEach(p => {
@@ -634,6 +664,7 @@ async function loadPosts() {
                          : "Follow";
             const el = document.createElement("article");
             el.className = "post-card";
+            el.dataset.postId = p.id;
             el.dataset.visibility = p.visibility || "public";
             el.innerHTML = createPostHTML(p);
 
@@ -644,22 +675,227 @@ async function loadPosts() {
             }
             feed.appendChild(el);
 
-            // Init swipe on sliders
             const slider = el.querySelector(".img-slider");
             if (slider) addSliderSwipe(slider);
         });
+
+        // ✅ Append the infinite scroll loader at the very bottom
+        let loader = document.getElementById("infinite-scroll-loader");
+        if (!loader) {
+            loader = document.createElement("div");
+            loader.id = "infinite-scroll-loader";
+            loader.className = "infinite-scroll-loader";
+            loader.innerHTML = `<div class="spinner"></div>`;
+        }
+        
+        if (!hasMorePosts) {
+            loader.innerHTML = `<p style="color:var(--text-muted);font-size:14px;padding:20px;">You've reached the end of the feed! 🎉</p>`;
+            loader.style.display = "flex";
+        } else {
+            loader.innerHTML = `<div class="spinner"></div>`;
+            loader.style.display = "none"; // Hidden initially
+        }
+        feed.appendChild(loader);
+
     } catch (err) {
         console.error("Load posts error:", err);
         const feed = document.getElementById("feed-container");
         if (feed) {
-            const addDiv = document.getElementById("add-post");
-            feed.innerHTML = "";
-            if (addDiv) feed.appendChild(addDiv);
-            feed.innerHTML += `<div class="empty-state"><div class="empty-state-icon">⚠️</div>Failed to load posts. Check your connection.</div>`;
+            feed.innerHTML += `<div class="empty-state"><div class="empty-state-icon">⚠️</div>Failed to load posts.</div>`;
         }
     }
 }
+// ══════════════════════════════════════════════════════════════
+// 📜 INFINITE SCROLL LOGIC
+// ══════════════════════════════════════════════════════════════
+async function loadMorePosts() {
+    if (isLoadingMore || !hasMorePosts || isMessagesPage) return;
+    if (document.getElementById("saved-posts-feed") || document.getElementById("user-posts-feed")) return;
 
+    isLoadingMore = true;
+    const loader = document.getElementById("infinite-scroll-loader");
+    if (loader) {
+        loader.innerHTML = `<div class="spinner"></div>`;
+        loader.style.display = "flex"; // Show spinner
+    }
+
+    const token = localStorage.getItem("token");
+    const nextPage = currentPage + 1;
+
+    try {
+        const res = await fetch(`/get_posts?page=${nextPage}&per_page=${postsPerPage}`, {
+            headers: { "Authorization": "Bearer " + token },
+            cache: "no-store"
+        });
+        if (!res.ok) throw new Error("Failed to fetch more posts");
+        
+        const newPosts = await res.json();
+        currentPage = nextPage; // Update page only on success
+        
+        if (newPosts.length < postsPerPage) {
+            hasMorePosts = false;
+        }
+
+        const feed = document.getElementById("feed-container");
+        const currentUsername = localStorage.getItem("username") || "";
+        
+        let followStates = { following: [], friends: [] };
+        try {
+            const r = await fetch("/my_follows", { headers: { "Authorization": "Bearer " + token }, cache: "no-store" });
+            if (r.ok) followStates = await r.json();
+        } catch (_) {}
+
+        const postsToAdd = newPosts.filter(p => p.username !== currentUsername);
+
+        postsToAdd.forEach(p => {
+            const status = followStates.friends.includes(p.username)   ? "Friends"
+                         : followStates.following.includes(p.username) ? "Following"
+                         : "Follow";
+                         
+            const el = document.createElement("article");
+            el.className = "post-card";
+            el.dataset.postId = p.id;
+            el.dataset.visibility = p.visibility || "public";
+            el.innerHTML = createPostHTML(p);
+
+            const btn = el.querySelector('.follow-btn');
+            if (btn) {
+                btn.textContent = status;
+                if (status !== "Follow") btn.classList.add("following");
+            }
+            
+            // Smooth fade-up animation
+            el.style.opacity = "0";
+            el.style.transform = "translateY(20px)";
+            el.style.transition = "all 0.4s ease";
+            
+            // Insert right before the loader
+            if (loader) {
+                feed.insertBefore(el, loader);
+            } else {
+                feed.appendChild(el);
+            }
+            
+            requestAnimationFrame(() => {
+                el.style.opacity = "1";
+                el.style.transform = "translateY(0)";
+            });
+
+            const slider = el.querySelector(".img-slider");
+            if (slider) addSliderSwipe(slider);
+        });
+
+        // If no more posts, change loader to "End of feed" message
+        if (!hasMorePosts) {
+            if (loader) {
+                loader.innerHTML = `<p style="color:var(--text-muted);font-size:14px;padding:20px;">You've reached the end of the feed! 🎉</p>`;
+            }
+        }
+
+    } catch (err) {
+        console.error("Load more error:", err);
+        currentPage--; // Rollback page number on error
+        if (loader) loader.style.display = "none";
+    } finally {
+        isLoadingMore = false;
+        if (hasMorePosts && loader) {
+            loader.style.display = "none"; // Hide spinner when done loading
+        }
+    }
+}
+// ══════════════════════════════════════════════════════════════
+// 🔄 SILENT FEED REFRESH (Bulletproof Version)
+// ══════════════════════════════════════════════════════════════
+async function silentRefreshFeed() {
+    // 🛑 TRAP 1: ONLY run if we are actually on the main home feed
+    if (isMessagesPage) return;
+    const feed = document.getElementById("feed-container");
+    if (!feed) return; 
+    
+    // 🛑 TRAP 2: Abort if we are on the Saved or User Profile page
+    if (document.getElementById("saved-posts-feed") || document.getElementById("user-posts-feed")) {
+        return; 
+    }
+
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    const currentUsername = localStorage.getItem("username") || "";
+
+    // 1. Get follow states for the new posts
+    let followStates = { following: [], friends: [] };
+    try {
+        const r = await fetch("/my_follows", { headers: { "Authorization": "Bearer " + token }, cache: "no-store" });
+        if (r.ok) followStates = await r.json();
+    } catch (_) {}
+
+    try {
+        // 2. Fetch the latest 20 posts (Increased from 5! This prevents bugs if your own posts are mixed in the top 5)
+        const res = await fetch("/get_posts?per_page=20", {
+            headers: { "Authorization": "Bearer " + token },
+            cache: "no-store"
+        });
+        if (!res.ok) return;
+        const newPosts = await res.json();
+        
+        // 3. Get IDs of posts currently in the DOM
+        const existingIds = new Set();
+        feed.querySelectorAll(".post-card").forEach(card => {
+            // ⚠️ CRITICAL: This only works if you added el.dataset.postId = p.id in loadPosts()!
+            if (card.dataset.postId) existingIds.add(String(card.dataset.postId));
+        });
+
+        // 4. Filter out posts we already have, and filter out your own posts
+        const postsToAdd = newPosts.filter(p => 
+            !existingIds.has(String(p.id)) && p.username !== currentUsername
+        );
+
+        // 5. If there are ACTUALLY new posts, slide them in!
+        if (postsToAdd.length > 0) {
+            const addDiv = document.getElementById("add-post");
+            const insertBeforeNode = addDiv ? addDiv.nextSibling : feed.firstChild;
+            
+            postsToAdd.forEach(p => {
+                const status = followStates.friends.includes(p.username)   ? "Friends"
+                             : followStates.following.includes(p.username) ? "Following"
+                             : "Follow";
+
+                const el = document.createElement("article");
+                el.className = "post-card";
+                el.dataset.postId = p.id; // ✅ Ensure new posts also get the ID tag
+                el.dataset.visibility = p.visibility || "public";
+                el.innerHTML = createPostHTML(p);
+                
+                const btn = el.querySelector('.follow-btn');
+                if (btn) {
+                    btn.textContent = status;
+                    if (status !== "Follow") btn.classList.add("following");
+                }
+                
+                // Smooth fade-in animation
+                el.style.opacity = "0";
+                el.style.transform = "translateY(-20px)";
+                el.style.transition = "all 0.4s ease";
+                
+                feed.insertBefore(el, insertBeforeNode);
+                
+                requestAnimationFrame(() => {
+                    el.style.opacity = "1";
+                    el.style.transform = "translateY(0)";
+                });
+                
+                const slider = el.querySelector(".img-slider");
+                if (slider) addSliderSwipe(slider);
+            });
+            
+            // Only show toast if the user is currently at the top of the page (otherwise it's annoying)
+            if (window.scrollY < 100) {
+                showToast(`${postsToAdd.length} new post${postsToAdd.length > 1 ? 's' : ''}`, "info", 3000);
+            }
+        }
+    } catch (e) {
+        console.error("Silent refresh error:", e);
+    }
+}
 // ─────────────────────── LIKE / REPOST ───────────────────────
 async function likePost(postId, btn) {
     const token = localStorage.getItem("token");
@@ -681,7 +917,122 @@ async function likePost(postId, btn) {
         }
     } catch (err) { console.error("Like error:", err); }
 }
+// ══════════════════════════════════════════════════════════════
+// 🔖 SAVE / UNSAVE POST LOGIC
+// ══════════════════════════════════════════════════════════════
+async function toggleSavePost(postId, btn) {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    
+    try {
+        const res = await fetch("/toggle_save_post", {
+            method: "POST",
+            headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+            body: JSON.stringify({ post_id: postId })
+        });
+        const data = await res.json();
+        
+        if (data.msg === "saved" || data.msg === "unsaved") {
+            // Toggle the visual state
+            btn.classList.toggle("active", data.saved);
+            const svg = btn.querySelector("svg");
+            if (svg) {
+                svg.style.fill = data.saved ? "currentColor" : "none";
+            }
+            showToast(data.saved ? "Post saved!" : "Removed from saved", "info", 2000);
+        }
+    } catch (err) {
+        console.error("Save error:", err);
+    }
+}
+async function loadSavedPosts() {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    
+    const centerFeed = document.querySelector(".center-feed");
+    if (!centerFeed) return;
+    
+    // 1. Build the Saved Page Layout
+    centerFeed.innerHTML = `
+        <button onclick="backToFeed()" style="
+            display:inline-flex;align-items:center;gap:6px;
+            background:transparent;border:1px solid var(--border-color);
+            color:var(--text-secondary);padding:7px 16px;border-radius:99px;
+            font-size:13px;cursor:pointer;margin-bottom:20px;
+            transition:var(--transition);"
+            onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
+            onmouseout="this.style.borderColor='var(--border-color)';this.style.color='var(--text-secondary)'">
+            ← Back to Feed
+        </button>
+        <h2 style="color:var(--text-primary);margin:0 0 20px 0;font-weight:700;font-size:22px;">Saved Posts</h2>
+        <div id="saved-posts-feed"></div>
+    `;
+    
+    const feed = document.getElementById("saved-posts-feed");
+    feed.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⏳</div>Loading...</div>`;
+    
+    // ✅ FIX: Fetch follow states so we can set the correct button text!
+    let followStates = { following: [], friends: [] };
+    try {
+        const r = await fetch("/my_follows", { headers: { "Authorization": "Bearer " + token }, cache: "no-store" });
+        if (r.ok) followStates = await r.json();
+    } catch (_) {}
+    
+    try {
+        // 2. Fetch saved posts from backend
+        const res = await fetch("/get_saved_posts", {
+            headers: { "Authorization": "Bearer " + token },
+            cache: "no-store"
+        });
+        if (!res.ok) throw new Error();
+        const posts = await res.json();
+        
+        feed.innerHTML = "";
+        
+        // 3. Handle empty state
+        if (!posts.length) {
+            feed.innerHTML = `<div class="empty-state"><div class="empty-state-icon">🔖</div>No saved posts yet.<br>Click the bookmark icon on any post to save it here!</div>`;
+            return;
+        }
+        
+        // 4. Render the posts
+        posts.forEach(p => {
+            // ✅ FIX: Determine the correct follow status for this specific user
+            const status = followStates.friends.includes(p.username)   ? "Friends"
+                         : followStates.following.includes(p.username) ? "Following"
+                         : "Follow";
 
+            const el = document.createElement("article");
+            el.className = "post-card";
+            el.dataset.postId = p.id;
+            el.dataset.visibility = p.visibility || "public";
+            el.innerHTML = createPostHTML(p);
+            
+            // ✅ FIX: Update the follow button text and visual state
+            const btn = el.querySelector('.follow-btn');
+            if (btn) {
+                btn.textContent = status;
+                if (status !== "Follow") btn.classList.add("following");
+            }
+            
+            // Since we are in the Saved feed, force the bookmark icon to look "Saved" (Gold)
+            const saveBtn = el.querySelector(".save-btn");
+            if (saveBtn) {
+                saveBtn.classList.add("active");
+                const svg = saveBtn.querySelector("svg");
+                if (svg) svg.style.fill = "currentColor";
+            }
+            
+            feed.appendChild(el);
+            
+            // Init swipe on sliders
+            const slider = el.querySelector(".img-slider");
+            if (slider) addSliderSwipe(slider);
+        });
+    } catch (err) {
+        feed.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⚠️</div>Failed to load saved posts.</div>`;
+    }
+}
 async function repostPost(postId, btn) {
     const token = localStorage.getItem("token");
     if (!token) { window.location.href = "/root.html"; return; }
@@ -1258,8 +1609,258 @@ document.addEventListener("DOMContentLoaded", async function () {
         });
     });
 
-    initSearch();
+         initSearch();
     await loadPosts();
     loadFriends();
     setInterval(loadFriends, 30000);
+    setInterval(silentRefreshFeed, 15000);
+
+    // ✅ INFINITE SCROLL TRIGGER
+    window.addEventListener("scroll", () => {
+        // Trigger when user is within 800px of the bottom of the page
+        const scrollPosition = window.innerHeight + window.scrollY;
+        const threshold = document.documentElement.scrollHeight - 800; 
+        
+        if (scrollPosition >= threshold) {
+            loadMorePosts();
+        }
+    });
 });
+
+function show() {
+    let s = document.getElementById("search-section");
+
+s.style.background = "var(--glass)";
+s.style.backdropFilter = "blur(20px) saturate(1.4)";
+s.style.height = "400%";
+s.style.padding = "10px 30px 30px 30px";
+s.style.borderRadius = "0px 0px 30px 30px";
+s.style.position = "fixed";
+s.style.border = "solid #00e87a 1px";
+s.style.boxShadow = "0px 0px 30px #003c20";
+s.style.left = "31.5%";
+s.style.top = "-1%";
+}
+function hide() {
+    let s = document.getElementById("search-section");
+
+s.style.background = "transparent";
+s.style.border = "none";
+s.style.boxShadow = "none";
+s.style.padding = " 14px 18px";
+s.style.height = "auto";
+s.style.backdropFilter = "none";
+}
+// ══════════════════════════════════════════════════════════════
+// 🔍 FULLSCREEN SEARCH LOGIC (Triggered by Explore icon)
+// ══════════════════════════════════════════════════════════════
+
+function openFullscreenSearch() {
+    const modal = document.getElementById("fullscreen-search-modal");
+    if (!modal) return;
+    modal.classList.add("active");
+    document.body.style.overflow = "hidden"; // Prevent background scrolling
+    
+    // Focus the input after the slide-up animation finishes
+    setTimeout(() => {
+        document.getElementById("fullscreen-search-input")?.focus();
+    }, 350); 
+}
+
+function closeFullscreenSearch() {
+    const modal = document.getElementById("fullscreen-search-modal");
+    if (!modal) return;
+    modal.classList.remove("active");
+    document.body.style.overflow = "";
+    
+    // Clear input and reset results
+    const input = document.getElementById("fullscreen-search-input");
+    const results = document.getElementById("fullscreen-search-results");
+    if (input) input.value = "";
+    if (results) results.innerHTML = `<div class="search-placeholder"><p>🔍 Search for people to connect with</p></div>`;
+}
+
+// Wire up the live search for the fullscreen input
+document.addEventListener("DOMContentLoaded", () => {
+    const fsInput = document.getElementById("fullscreen-search-input");
+    const fsResults = document.getElementById("fullscreen-search-results");
+    
+    if (fsInput && fsResults) {
+        fsInput.addEventListener("input", () => {
+            clearTimeout(searchTimeout); // Reuse the timeout variable from your top-bar search
+            const q = fsInput.value.trim();
+            
+            if (!q) {
+                fsResults.innerHTML = `<div class="search-placeholder"><p>🔍 Search for people to connect with</p></div>`;
+                return;
+            }
+            searchTimeout = setTimeout(() => runFullscreenSearch(q, fsResults), 280);
+        });
+    }
+});
+
+async function runFullscreenSearch(q, resultsContainer) {
+    if (!q) return;
+    const token = localStorage.getItem("token");
+    try {
+        const res = await fetch(`/search_users?q=${encodeURIComponent(q)}`, {
+            headers: { "Authorization": "Bearer " + (token || "") }
+        });
+        if (!res.ok) return;
+        const users = await res.json();
+        resultsContainer.innerHTML = "";
+        
+        if (!users.length) {
+            resultsContainer.innerHTML = `<div class="search-no-results">No users found for "<strong>${escapeHtml(q)}</strong>"</div>`;
+        } else {
+            users.forEach(u => {
+                const item = document.createElement("div");
+                item.className = "search-result-item";
+                item.innerHTML = `
+                    <img src="${getSafePic(u.profile_picture)}" alt="">
+                    <div>
+                        <div class="sr-name">${escapeHtml(u.name || u.username)}</div>
+                        <div class="sr-user">@${escapeHtml(u.username)}</div>
+                    </div>`;
+                item.onclick = () => {
+                    closeFullscreenSearch();
+                    loadUserPage(u.username);
+                };
+                resultsContainer.appendChild(item);
+            });
+        }
+    } catch (err) {
+        console.error("Fullscreen search error:", err);
+    }
+}
+// ══════════════════════════════════════════════════════════════
+// 🔔 NOTIFICATIONS LOGIC
+// ══════════════════════════════════════════════════════════════
+
+let notifInterval = null;
+
+async function fetchUnreadCount() {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    try {
+        const res = await fetch("/get_unread_notif_count", { headers: { "Authorization": "Bearer " + token } });
+        if (!res.ok) return;
+        const data = await res.json();
+        const badge = document.getElementById("notif-badge");
+        if (badge) {
+            if (data.count > 0) {
+                badge.textContent = data.count > 99 ? "99+" : data.count;
+                badge.classList.remove("hidden");
+            } else {
+                badge.classList.add("hidden");
+            }
+        }
+    } catch (e) { console.error("Notif count error:", e); }
+}
+
+async function toggleNotifications(e) {
+    e.stopPropagation();
+    const dropdown = document.getElementById("notif-dropdown");
+    const isOpen = dropdown.classList.contains("open");
+    
+    if (isOpen) {
+        dropdown.classList.remove("open");
+    } else {
+        dropdown.classList.add("open");
+        await loadNotifications();
+        markAllRead();
+    }
+}
+
+async function loadNotifications() {
+    const token = localStorage.getItem("token");
+    const list = document.getElementById("notif-list");
+    if (!list) return;
+    
+    list.innerHTML = `<div class="notif-loading">Loading...</div>`;
+    
+    try {
+        const res = await fetch("/get_notifications", { headers: { "Authorization": "Bearer " + token } });
+        if (!res.ok) throw new Error();
+        const notifs = await res.json();
+        
+        if (!notifs.length) {
+            list.innerHTML = `<div class="notif-empty">No notifications yet</div>`;
+            return;
+        }
+        
+        list.innerHTML = "";
+        notifs.forEach(n => {
+            let text = "";
+            let icon = "";
+            
+            if (n.type === "like") {
+                text = `liked your post`;
+                icon = "❤️";
+            } else if (n.type === "comment") {
+                text = `commented on your post`;
+                icon = "💬";
+            } else if (n.type === "follow") {
+                text = `started following you`;
+                icon = "👤";
+            } else if (n.type === "new_post") {
+                text = `published a new post`; // ✅ ADD THIS
+                icon = "📝";                  // ✅ ADD THIS
+            }
+            
+            const item = document.createElement("div");
+            item.className = `notif-item ${n.is_read ? '' : 'unread'}`;
+            item.innerHTML = `
+                <img src="${getSafePic(n.actor_pic)}" class="notif-avatar" onclick="loadUserPage('${n.actor_username}')">
+                <div class="notif-content" onclick="handleNotifClick('${n.actor_username}', ${n.post_id || 'null'})">
+                    <p><strong>${escapeHtml(n.actor_name || n.actor_username)}</strong> ${text}</p>
+                    ${n.post_preview ? `<span class="notif-preview">"${escapeHtml(n.post_preview)}"</span>` : ''}
+                    <span class="notif-time">${getTimeAgo(n.created_at)}</span>
+                </div>
+                <div class="notif-icon-badge">${icon}</div>
+            `;
+            list.appendChild(item);
+        });
+    } catch (e) {
+        list.innerHTML = `<div class="notif-empty">Failed to load</div>`;
+    }
+}
+
+function handleNotifClick(username, postId) {
+    document.getElementById("notif-dropdown").classList.remove("open");
+    if (postId) {
+        // Scroll to post or open it (for now, just go to user page)
+        loadUserPage(username);
+    } else {
+        loadUserPage(username);
+    }
+}
+
+async function markAllRead() {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    try {
+        await fetch("/mark_notifications_read", { 
+            method: "POST", 
+            headers: { "Authorization": "Bearer " + token } 
+        });
+        document.getElementById("notif-badge").classList.add("hidden");
+        document.querySelectorAll(".notif-item.unread").forEach(el => el.classList.remove("unread"));
+    } catch (e) {}
+}
+
+// Close dropdown when clicking outside
+document.addEventListener("click", (e) => {
+    const dropdown = document.getElementById("notif-dropdown");
+    const wrapper = document.querySelector(".notif-wrapper");
+    if (dropdown && wrapper && !wrapper.contains(e.target)) {
+        dropdown.classList.remove("open");
+    }
+});
+
+// Start polling for new notifications every 30 seconds
+function startNotifPolling() {
+    fetchUnreadCount();
+    if (notifInterval) clearInterval(notifInterval);
+    notifInterval = setInterval(fetchUnreadCount, 30000);
+}
