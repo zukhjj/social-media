@@ -775,17 +775,42 @@ function setupMessageInteractions() {
     });
 }
 
+
 // ===== REPLY =====
-function setReply(msgId) {
-    const btn = document.querySelector(`.reply-btn[data-id="${msgId}"]`);
-    if (!btn) return;
-    const numericId = btn.dataset.numericId;
-    if (!numericId) { showToast("Cannot reply to unsent message", "error"); return; }
+function setReply(msgId, numericId) {
+    // Fallback to extracting numeric ID from msgId if not provided
+    if (!numericId) {
+        numericId = String(msgId).replace('id-', '');
+    }
+    
     const el = document.querySelector(`.message-item[data-msg-id="${msgId}"]`);
     if (!el) return;
-    const sender = el.querySelector(".message-bubble")?.textContent || "Unknown";
+    
+    // Get only the actual message text, ignoring time/reactions/media
+    const textEl = el.querySelector('.message-text');
+    let previewText = "Message";
+    
+    if (textEl) {
+        previewText = textEl.textContent.trim();
+    } else {
+        // If it's a media-only message (no text)
+        const mediaEl = el.querySelector('.message-media, .message-document, .message-carousel');
+        if (mediaEl) {
+            if (mediaEl.classList.contains('message-carousel')) previewText = "📷 Photos";
+            else if (mediaEl.classList.contains('message-document')) previewText = "📎 " + (mediaEl.querySelector('.file-name')?.textContent || "Attachment");
+            else previewText = "🎥 Media";
+        }
+    }
+    
     const isMine = el.classList.contains("mine");
-    currentReply = { msgId: numericId, sender: isMine ? "Yourself" : document.getElementById("chat-username").textContent, content: sender };
+    const senderName = isMine ? "Yourself" : document.getElementById("chat-username")?.textContent || "User";
+    
+    currentReply = { 
+        msgId: numericId, 
+        sender: senderName, 
+        content: previewText 
+    };
+    
     document.getElementById("reply-to-name").textContent = currentReply.sender;
     document.getElementById("reply-to-content").textContent = currentReply.content;
     document.getElementById("reply-preview-bar").classList.remove("hidden");
@@ -820,14 +845,15 @@ window.toggleEmojiPicker = function (msgId, btn) {
         s.addEventListener('touchend', handle, { passive: false });
         picker.appendChild(s);
     });
-
+    console.log(msgId)
     document.body.appendChild(picker);
-    const rect = btn.getBoundingClientRect();
+    const rect = document.getElementById("reactions-"+msgId).getBoundingClientRect();
+    const dd=btn.getBoundingClientRect()
     const pickerW = picker.offsetWidth;
     let left = rect.left + (rect.width / 2) - (pickerW / 2);
-    let top = rect.top - 50;
+    let top = rect.top - 140;
     left = Math.max(6, Math.min(left, window.innerWidth - pickerW - 6));
-    top = Math.max(6, top);
+    
     picker.style.left = `${left}px`;
     picker.style.top = `${top}px`;
     requestAnimationFrame(() => picker.classList.add('visible'));
@@ -853,20 +879,23 @@ window.closeEmojiPickers = function () {
 };
 
 // ===== REACTIONS =====
+
 window.selectReaction = async function (msgId, emoji) {
     if (window._reacting === msgId + emoji) return;
     window._reacting = msgId + emoji;
     setTimeout(() => delete window._reacting, 500);
     
-    const btn = document.querySelector(`.react-btn[data-id="${msgId}"]`);
-    const id = btn?.dataset.numericId;
+    // ✅ FIX: Extract numeric ID directly from msgId instead of searching for .react-btn
+    const id = String(msgId).replace('id-', '');
     if (!id) return;
+    
     const box = document.getElementById(`reactions-${msgId}`);
     if (!box) return;
     
     const activeBadge = box.querySelector('.react-badge.active');
     const currentEmoji = activeBadge?.dataset.emoji;
     
+    // Update UI instantly for smooth UX
     if (currentEmoji === emoji) {
         activeBadge.remove();
     } else {
@@ -883,6 +912,7 @@ window.selectReaction = async function (msgId, emoji) {
         }
     }
     
+    // Send to server
     const token = localStorage.getItem('token');
     const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
     try {
@@ -1664,10 +1694,13 @@ window.handleTextBubbleClick = function(e, bubble) {
 document.addEventListener('click', (e) => {
     if (activeMenu && !e.target.closest('.msg-options-menu') && !e.target.closest('.msg-options-btn')) {
         activeMenu.classList.remove('show');
+        document.getElementById("messages-container").style.setProperty('padding-bottom', '120px', 'important');
+
         activeMenu = null;
     }
     if (activeConvMenu && !e.target.closest('.conv-options-menu') && !e.target.closest('.conv-options-btn')) {
         activeConvMenu.classList.remove('show');
+        document.getElementById("messages-container").style.setProperty('padding-bottom', '120px', 'important');
         activeConvMenu = null;
     }
 });
@@ -1675,6 +1708,8 @@ document.addEventListener('click', (e) => {
 // ===== MENU ACTION ROUTER =====
 document.addEventListener('click', (e) => {
     const btn = e.target.closest('.msg-options-menu button');
+    
+
     if (!btn) return;
     
     const menu = btn.closest('.msg-options-menu');
@@ -1685,6 +1720,7 @@ document.addEventListener('click', (e) => {
     
     const action = btn.dataset.action;
     menu.classList.remove('show');
+     document.getElementById("messages-container").style.setProperty('padding-bottom', '400px', 'important');
     activeMenu = null;
     
     if (action === 'reply') setReply(msgId);
