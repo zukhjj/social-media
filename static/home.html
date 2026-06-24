@@ -10,35 +10,45 @@
 </head>
 <body>
 
-    <!-- ── App Bar ── -->
-    <div id="app-bar">
-        <header class="top-bar">
-            <a href="home.html"><img src="logo.png" id="logo" alt="Social Grid Logo"></a>
+    <header class="top-bar">
+    <!-- Left: Logo -->
+    <a href="home.html"><img src="logo.png" id="logo" alt="Social Grid Logo"></a>
 
-            <!-- BUG FIX: search now wired to real search (initSearch() in JS) -->
-            <div class="search-container">
-                <img src="search.png" class="search-icon" alt="">
-                <input
-                    type="search"
-                    id="search-input"
-                    class="search-input"
-                    placeholder="Search people…"
-                    autocomplete="off"
-                    aria-label="Search users">
-                <!-- Dropdown injected by initSearch() -->
-            </div>
-
-            <img
-                src="unkown.png"
-                id="profile-img"
-                alt="My Profile"
-                class="profile-btn"
-                tabindex="0"
-                title="View my profile"
-                onclick="loadUserPage(localStorage.getItem('username'))">
-        </header>
+    <!-- Middle: Search -->
+    <div class="search-container">
+        <img src="search.png" class="search-icon" alt="">
+        <input type="search" id="search-input" class="search-input" placeholder="Search people…" autocomplete="off">
     </div>
 
+    <!-- Right: Notifications & Profile -->
+    <div class="top-bar-right">
+        <!-- Notification Bell -->
+        <div class="notif-wrapper">
+            <button class="notif-btn" onclick="toggleNotifications(event)" title="Notifications">
+                <!-- If you don't have bell.png, use this SVG instead: -->
+                <svg class="notif-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                </svg>
+                <span id="notif-badge" class="notif-badge hidden">0</span>
+            </button>
+            
+            <!-- Dropdown -->
+            <div id="notif-dropdown" class="notif-dropdown">
+                <div class="notif-header">
+                    <h3>Notifications</h3>
+                    <button class="notif-mark-read" onclick="markAllRead()">Mark all read</button>
+                </div>
+                <div id="notif-list" class="notif-list">
+                    <div class="notif-empty">No notifications yet</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Profile Picture -->
+        <img src="unkown.png" id="profile-img" alt="My Profile" class="profile-btn" tabindex="0" onclick="loadUserPage(localStorage.getItem('username'))">
+    </div>
+</header>
     <!-- ── Main Layout ── -->
     <main class="layout">
 
@@ -50,12 +60,12 @@
             <a href="/messages.html" class="nav-item">
                 <img src="chat.png" alt="" class="nav-icon"><span class="nav-label">Chat</span>
             </a>
-            <a href="#" class="nav-item" onclick="setActive(this,event)">
-                <img src="search2.png" alt="" class="nav-icon"><span class="nav-label">Explore</span>
-            </a>
-            <a href="#" class="nav-item" onclick="setActive(this,event)">
-                <img src="save.png" alt="" class="nav-icon"><span class="nav-label">Saved</span>
-            </a>
+          <a href="#" class="nav-item" onclick="setActive(this,event); openFullscreenSearch()">
+    <img src="search2.png" alt="" class="nav-icon"><span class="nav-label">Explore</span>
+</a>
+           <a href="#" class="nav-item" onclick="setActive(this,event); loadSavedPosts()">
+    <img src="save.png" alt="" class="nav-icon"><span class="nav-label">Saved</span>
+</a>
             <a href="#" class="nav-item" onclick="setActive(this,event)">
                 <img src="setting.png" alt="" class="nav-icon"><span class="nav-label">Settings</span>
             </a>
@@ -206,6 +216,20 @@
 
     <!-- Toast container -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
-
+    <!-- ══════ FULLSCREEN SEARCH MODAL ══════ -->
+<div id="fullscreen-search-modal" class="fullscreen-search-modal">
+    <div class="search-modal-header">
+        <button class="search-modal-close" onclick="closeFullscreenSearch()">✕</button>
+        <div class="search-modal-input-wrap">
+            <img src="search.png" class="search-modal-icon" alt="">
+            <input type="text" id="fullscreen-search-input" class="search-modal-input" placeholder="Search users..." autocomplete="off">
+        </div>
+    </div>
+    <div id="fullscreen-search-results" class="fullscreen-search-results">
+        <div class="search-placeholder">
+            <p>🔍 Search for people to connect with</p>
+        </div>
+    </div>
+</div>
 </body>
 </html>
