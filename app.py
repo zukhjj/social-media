@@ -258,6 +258,7 @@ def invalidate_feed_cache():
                 finally:
                     cur.close()
                     release_conn(conn)
+        cache.clear() 
     except Exception:
         pass
 
@@ -522,10 +523,20 @@ def add_post():
         user_id = resolve_user_id(cur, g.user_id)
         if not user_id: return jsonify({"msg": "user_not_found"}), 404
         
+        # ✅ 1. Insert the post AND get the new post's ID immediately
         cur.execute(
-            "INSERT INTO posts (user_id, content, image, video, visibility) VALUES (%s, %s, %s, %s, %s)",
+            "INSERT INTO posts (user_id, content, image, video, visibility) VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (user_id, content or None, stored_image, video_url, visibility)
         )
+        new_post_id = cur.fetchone()[0]
+        
+        # ✅ 2. Notify ALL followers about this new post in one fast query!
+        cur.execute("""
+            INSERT INTO notifications (receiver_id, actor_id, type, post_id)
+            SELECT follower_id, %s, 'new_post', %s
+            FROM follows WHERE following_id = %s AND follower_id != %s
+        """, (user_id, new_post_id, user_id, user_id))
+
         conn.commit()
         invalidate_feed_cache()
         return jsonify({"msg": "post_created"})
@@ -545,7 +556,8 @@ def _serialize_post(r):
         "images": images,
         "video": r[3],
         "likes": r[4], "comments": r[5], "reposts": r[6],
-        "visibility": r[7], "username": r[8], "profile_picture": r[9]
+        "visibility": r[7], "username": r[8], "profile_picture": r[9],
+        "is_saved": r[10] if len(r) > 10 else False 
     }
 
 @app.route("/get_posts", methods=["GET"])
@@ -573,6 +585,7 @@ def get_posts():
         except Exception:
             pass
 
+    # ✅ FIX 1: Reduced cache timeout to 5 seconds so new posts appear almost instantly
     ck = f"posts:feed:{page}:{per_page}:{current_user_id}"
     cached = cache.get(ck)
     if cached: return jsonify(cached)
@@ -586,20 +599,20 @@ def get_posts():
         if current_user_id:
             query = """
                 SELECT p.id, p.content, p.image, p.video, p.like_count, p.comment_count, p.repost_count,
-                       p.visibility, u.username, u.profile_picture
+                       p.visibility, u.username, u.profile_picture,
+                       CASE WHEN sp.id IS NOT NULL THEN TRUE ELSE FALSE END as is_saved
                 FROM posts p
                 JOIN users u ON u.id = p.user_id
+                LEFT JOIN saved_posts sp ON sp.post_id = p.id AND sp.user_id = %s
                 WHERE
                     p.visibility = 'public'
                     OR (p.visibility = 'private' AND p.user_id = %s)
                     OR (
                         p.visibility = 'friends' AND (
                             p.user_id = %s
-                            OR (
-                                EXISTS (SELECT 1 FROM follows f1
-                                        WHERE f1.follower_id = p.user_id AND f1.following_id = %s)
-                                AND EXISTS (SELECT 1 FROM follows f2
-                                            WHERE f2.follower_id = %s AND f2.following_id = p.user_id)
+                            OR EXISTS (
+                                SELECT 1 FROM follows f 
+                                WHERE f.follower_id = %s AND f.following_id = p.user_id
                             )
                         )
                     )
@@ -610,19 +623,18 @@ def get_posts():
         else:
             cur.execute(
                 "SELECT p.id, p.content, p.image, p.video, p.like_count, p.comment_count, p.repost_count, "
-                "p.visibility, u.username, u.profile_picture "
+                "p.visibility, u.username, u.profile_picture, FALSE as is_saved "
                 "FROM posts p JOIN users u ON u.id = p.user_id "
                 "WHERE p.visibility = 'public' ORDER BY p.created_at DESC LIMIT %s OFFSET %s",
                 (per_page, offset)
             )
         
         result = [_serialize_post(r) for r in cur.fetchall()]
-        cache.set(ck, result, timeout=30)
+        cache.set(ck, result, timeout=5) # ✅ Cache for only 5 seconds
         return jsonify(result)
         
     finally:
         cur.close(); release_conn(conn)
-
 @app.route("/like_post", methods=["POST"])
 @token_required
 @limiter.limit("30 per minute")
@@ -647,7 +659,10 @@ def like_post():
             cur.execute("INSERT INTO likes (user_id,post_id) VALUES (%s,%s)", (user_id, post_id))
             cur.execute("UPDATE posts SET like_count=like_count+1 WHERE id=%s", (post_id,))
             liked = True
-        
+            
+            cur.execute("SELECT user_id FROM posts WHERE id=%s", (post_id,))
+            post_owner = cur.fetchone()[0]
+            create_notification(post_owner, user_id, 'like', post_id)
         conn.commit()
         invalidate_feed_cache()
         return jsonify({"msg": "done", "liked": liked})
@@ -828,6 +843,9 @@ def add_comment():
         cur.execute("INSERT INTO comments (post_id,user_id,content) VALUES (%s,%s,%s)", (post_id, user_id, content))
         cur.execute("UPDATE posts SET comment_count=comment_count+1 WHERE id=%s", (post_id,))
         conn.commit()
+        cur.execute("SELECT user_id FROM posts WHERE id=%s", (post_id,))
+        post_owner = cur.fetchone()[0]
+        create_notification(post_owner, user_id, 'comment', post_id)
         cache.delete(f"comments:{post_id}")
         return jsonify({"msg": "comment_added"})
         
@@ -937,6 +955,8 @@ def follow():
             conn.commit()
             cur.execute("SELECT 1 FROM follows WHERE follower_id=%s AND following_id=%s", (target_id, user_id))
             status = "friends" if cur.fetchone() else "following"
+            
+            create_notification(target_id, user_id, 'follow')
             return jsonify({"msg": "followed", "status": status})
             
     except Exception as e:
@@ -1153,7 +1173,7 @@ def get_user_profile(username):
         following = cur.fetchone()[0]
 
         if current_user_id:
-            if current_user_id == uid:
+            if int(current_user_id) == int(uid):
                 cur.execute("""
                     SELECT p.id,p.content,p.image,p.video,p.like_count,p.comment_count,p.repost_count,
                            p.visibility,p.created_at,u.username,u.profile_picture
@@ -1849,7 +1869,83 @@ def get_user_status(username):
         return jsonify({"is_online": bool(row[0]) if row else False})
     finally:
         cur.close(); release_conn(conn)
+def create_notification(receiver_id, actor_id, notif_type, post_id=None):
+    """Creates a notification if the actor isn't the receiver"""
+    if not receiver_id or not actor_id or int(receiver_id) == int(actor_id):
+        return
+    conn = get_conn()
+    if not conn: return
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO notifications (receiver_id, actor_id, type, post_id) VALUES (%s, %s, %s, %s)",
+            (receiver_id, actor_id, notif_type, post_id)
+        )
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        logger.error(f"Notification error: {e}")
+    finally:
+        release_conn(conn)
+# ─────────────────────────────────────────────────────────────
+# 🔔 NOTIFICATIONS ROUTES
+# ─────────────────────────────────────────────────────────────
+@app.route("/get_notifications", methods=["GET"])
+@token_required
+def get_notifications():
+    conn = get_conn()
+    if not conn: return jsonify([]), 503
+    cur = conn.cursor()
+    try:
+        user_id = resolve_user_id(cur, g.user_id)
+        cur.execute("""
+            SELECT n.id, n.type, n.post_id, n.is_read, n.created_at,
+                   u.username, u.name, u.profile_picture, p.content
+            FROM notifications n
+            JOIN users u ON n.actor_id = u.id
+            LEFT JOIN posts p ON n.post_id = p.id
+            WHERE n.receiver_id = %s
+            ORDER BY n.created_at DESC LIMIT 30
+        """, (user_id,))
+        
+        notifs = []
+        for r in cur.fetchall():
+            notifs.append({
+                "id": r[0], "type": r[1], "post_id": r[2], "is_read": r[3],
+                "created_at": str(r[4]), "actor_username": r[5], 
+                "actor_name": r[6], "actor_pic": r[7], "post_preview": (r[8] or "")[:50]
+            })
+        return jsonify(notifs)
+    finally:
+        cur.close(); release_conn(conn)
 
+@app.route("/get_unread_notif_count", methods=["GET"])
+@token_required
+def get_unread_notif_count():
+    conn = get_conn()
+    if not conn: return jsonify({"count": 0}), 503
+    cur = conn.cursor()
+    try:
+        user_id = resolve_user_id(cur, g.user_id)
+        cur.execute("SELECT COUNT(*) FROM notifications WHERE receiver_id=%s AND is_read=FALSE", (user_id,))
+        count = cur.fetchone()[0]
+        return jsonify({"count": count})
+    finally:
+        cur.close(); release_conn(conn)
+
+@app.route("/mark_notifications_read", methods=["POST"])
+@token_required
+def mark_notifications_read():
+    conn = get_conn()
+    if not conn: return jsonify({"msg": "db_error"}), 503
+    cur = conn.cursor()
+    try:
+        user_id = resolve_user_id(cur, g.user_id)
+        cur.execute("UPDATE notifications SET is_read=TRUE WHERE receiver_id=%s AND is_read=FALSE", (user_id,))
+        conn.commit()
+        return jsonify({"msg": "marked_read"})
+    finally:
+        cur.close(); release_conn(conn)
 # ─────────────────────────────────────────────────────────────
 # Database Initialization
 # ─────────────────────────────────────────────────────────────
@@ -1906,6 +2002,14 @@ def init_db():
                 emoji TEXT, created_at TIMESTAMP DEFAULT NOW(),
                 UNIQUE(message_id,user_id,emoji)
             );
+                        CREATE TABLE IF NOT EXISTS saved_posts (
+                id SERIAL PRIMARY KEY,
+                user_id INT REFERENCES users(id) ON DELETE CASCADE,
+                post_id INT REFERENCES posts(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(user_id, post_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_saved_user ON saved_posts(user_id, created_at DESC);
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_edited BOOLEAN DEFAULT FALSE;
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS visibility TEXT DEFAULT 'public';
             ALTER TABLE posts DROP CONSTRAINT IF EXISTS posts_visibility_check;
@@ -1923,6 +2027,16 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_users_email          ON users(email);
             CREATE INDEX IF NOT EXISTS idx_reactions_msg        ON message_reactions(message_id);
             CREATE INDEX IF NOT EXISTS idx_users_last_seen      ON users(last_seen DESC);
+              CREATE TABLE IF NOT EXISTS notifications (
+                id SERIAL PRIMARY KEY,
+                receiver_id INT REFERENCES users(id) ON DELETE CASCADE,
+                actor_id INT REFERENCES users(id) ON DELETE CASCADE,
+                type TEXT CHECK (type IN ('like', 'comment', 'follow')),
+                post_id INT REFERENCES posts(id) ON DELETE CASCADE,
+                is_read BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_notif_receiver ON notifications(receiver_id, is_read, created_at DESC);
         """)
         conn.commit()
         logger.info("✅ Tables & indexes ready")
@@ -1933,7 +2047,70 @@ def init_db():
         return False
     finally:
         cur.close(); release_conn(conn)
+# ─────────────────────────────────────────────────────────────
+# 🔖 SAVED POSTS ROUTES
+# ─────────────────────────────────────────────────────────────
+@app.route("/toggle_save_post", methods=["POST"])
+@token_required
+def toggle_save_post():
+    """Saves a post if not saved, or unsaves it if already saved"""
+    data = request.json or {}
+    post_id = data.get("post_id")
+    if not post_id: return jsonify({"msg": "post_id_required"}), 400
+    
+    conn = get_conn()
+    if not conn: return jsonify({"msg": "db_error"}), 503
+    cur = conn.cursor()
+    
+    try:
+        user_id = resolve_user_id(cur, g.user_id)
+        if not user_id: return jsonify({"msg": "user_not_found"}), 404
+        
+        # Check if already saved
+        cur.execute("SELECT 1 FROM saved_posts WHERE user_id=%s AND post_id=%s", (user_id, post_id))
+        if cur.fetchone():
+            # Unsave
+            cur.execute("DELETE FROM saved_posts WHERE user_id=%s AND post_id=%s", (user_id, post_id))
+            conn.commit()
+            return jsonify({"msg": "unsaved", "saved": False})
+        else:
+            # Save
+            cur.execute("INSERT INTO saved_posts (user_id, post_id) VALUES (%s, %s)", (user_id, post_id))
+            conn.commit()
+            return jsonify({"msg": "saved", "saved": True})
+            
+    except Exception as e:
+        conn.rollback(); logger.error(f"Toggle save: {e}")
+        return jsonify({"msg": "error"}), 500
+    finally:
+        cur.close(); release_conn(conn)
 
+@app.route("/get_saved_posts", methods=["GET"])
+@token_required
+def get_saved_posts():
+    """Fetches all posts saved by the current user"""
+    conn = get_conn()
+    if not conn: return jsonify([]), 503
+    cur = conn.cursor()
+    
+    try:
+        user_id = resolve_user_id(cur, g.user_id)
+        if not user_id: return jsonify({"msg": "user_not_found"}), 404
+        
+        cur.execute("""
+            SELECT p.id, p.content, p.image, p.video, p.like_count, p.comment_count, p.repost_count,
+                   p.visibility, u.username, u.profile_picture
+            FROM saved_posts s
+            JOIN posts p ON s.post_id = p.id
+            JOIN users u ON p.user_id = u.id
+            WHERE s.user_id = %s
+            ORDER BY s.created_at DESC
+        """, (user_id,))
+        
+        result = [_serialize_post(r) for r in cur.fetchall()]
+        return jsonify(result)
+    finally:
+        cur.close(); release_conn(conn)
 # ─────────────────────────────────────────────────────────────
 # App Startup
 # ─────────────────────────────────────────────────────────────
