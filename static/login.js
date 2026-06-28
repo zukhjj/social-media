@@ -188,11 +188,11 @@ async function sign_up(e) {
         document.getElementById("usererror").textContent = "connection_error";
     }
 }
-
 async function checkAuth() {
     console.log("[checkAuth] Start - pathname:", window.location.pathname);
     let token = localStorage.getItem("token");
     console.log("[checkAuth] Token:", token ? "EXISTS" : "NOT FOUND");
+    
     if (!token) {
         if (!window.location.pathname.includes("login.html") && !window.location.pathname.includes("sign_up.html") && !window.location.pathname.includes("root.html")) {
             console.log("[checkAuth] No token → redirecting to /login.html");
@@ -200,13 +200,18 @@ async function checkAuth() {
         }
         return;
     }
+    
     try {
         console.log("[checkAuth] Verifying token with server...");
+        
+        // ✅ FIX: Changed "auth" to "Authorization" and added "Bearer " prefix!
         let res = await fetch("/api/verify", {
-            headers: { "auth": token }
+            headers: { "Authorization": "Bearer " + token } 
         });
+        
         let data = await res.json();
         console.log("[checkAuth] Server response:", data);
+        
         if (data.msg !== "ok") {
             console.log("[checkAuth] Invalid token → clearing & redirecting");
             localStorage.removeItem("token");
@@ -216,9 +221,11 @@ async function checkAuth() {
             }
             return;
         }
+        
         if (data.username) {
             localStorage.setItem("username", data.username);
         }
+        
         if (!window.location.pathname.includes("home.html")) {
             console.log("[checkAuth] Auth OK → redirecting to /home.html");
             window.location.href = "/home.html";
