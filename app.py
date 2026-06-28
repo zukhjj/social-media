@@ -14,6 +14,12 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from psycopg2 import pool, OperationalError
 import cloudinary.uploader, cloudinary.api
+import smtplib
+import random
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "ahmedaminenouily@gmail.com") 
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "bvnn obqn igmy lasa")
 
 # ─────────────────────────────────────────────────────────────
 # Logging Setup
@@ -63,6 +69,7 @@ _last_seen_cache = {}
 
 def init_db_pool():
     global _db_pool
+    
     try:
         db_url = os.environ.get(
             "DATABASE_URL",
@@ -303,7 +310,125 @@ def health():
     cur.close()
     release_conn(conn)
     return jsonify({"status": "healthy", "ts": datetime.datetime.utcnow().isoformat()})
+# ─────────────────────────────────────────────────────────────
+# 📧 EMAIL OTP LOGIN ROUTES
+# ─────────────────────────────────────────────────────────────
 
+def send_otp_email(to_email, otp_code):
+    """دالة لإرسال الإيميل بتنسيق HTML جميل"""
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_EMAIL
+        msg['To'] = to_email
+        msg['Subject'] = "Social Grid - Login Verification Code"
+        
+        body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 400px; margin: auto; padding: 20px; border: 1px solid #27272a; border-radius: 10px; text-align: center; background: #111114; color: white;">
+            <h2 style="color: #1bc35e;">Social Grid</h2>
+            <p>Your login verification code is:</p>
+            <h1 style="letter-spacing: 8px; color: #1bc35e; font-size: 32px;">{otp_code}</h1>
+            <p style="color: #71717a; font-size: 12px;">This code will expire in 10 minutes. Do not share it with anyone.</p>
+        </div>
+        """
+        msg.attach(MIMEText(body, 'html'))
+        
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(SMTP_EMAIL, SMTP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        logger.error(f"Email send error: {e}")
+        return False
+
+@app.route("/request_login_otp", methods=["POST"])
+@limiter.limit("3 per minute") 
+def request_login_otp():
+    data = request.json or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email: return jsonify({"msg": "email_required"}), 400
+        
+    conn = get_conn()
+    if not conn: return jsonify({"msg": "db_error"}), 503
+    cur = conn.cursor()
+    
+    try:
+        cur.execute("SELECT id FROM users WHERE email=%s", (email,))
+        if not cur.fetchone():
+            return jsonify({"msg": "user_not_found"}), 404
+            
+        otp_code = str(random.randint(100000, 999999))
+        expires = datetime.datetime.utcnow() + datetime.timedelta(minutes=10)
+        
+        cur.execute(
+            "UPDATE users SET otp_code=%s, otp_expires=%s WHERE email=%s",
+            (otp_code, expires, email)
+        )
+        conn.commit()
+        
+        if send_otp_email(email, otp_code):
+            return jsonify({"msg": "otp_sent"})
+        else:
+            return jsonify({"msg": "email_failed"}), 500
+            
+    except Exception as e:
+        conn.rollback(); logger.error(f"Request OTP error: {e}")
+        return jsonify({"msg": "error"}), 500
+    finally:
+        cur.close(); release_conn(conn)
+@app.route("/verify_login_otp", methods=["POST"])
+def verify_login_otp():
+    data = request.json or {}
+    email = (data.get("email") or "").strip().lower()
+    otp_code = (data.get("otp_code") or "").strip()
+    
+    if not email or not otp_code: 
+        return jsonify({"msg": "missing_fields", "error": "Please enter the code"}), 400
+        
+    conn = get_conn()
+    if not conn: return jsonify({"msg": "db_error", "error": "Server error"}), 503
+    cur = conn.cursor()
+    
+    try:
+        cur.execute("SELECT id, username, profile_picture, otp_code, otp_expires FROM users WHERE email=%s", (email,))
+        user = cur.fetchone()
+        if not user: 
+            return jsonify({"msg": "user_not_found", "error": "User not found"}), 404
+            
+        uid, uname, pic, stored_otp, expires = user
+
+        if not stored_otp:
+            return jsonify({"msg": "no_otp_requested", "error": "No code was requested. Please try logging in again."}), 401
+            
+        if stored_otp != otp_code:
+            return jsonify({"msg": "invalid_otp", "error": "Wrong code. Please check and try again."}), 401
+            
+        if expires < datetime.datetime.utcnow():
+            cur.execute("UPDATE users SET otp_code=NULL, otp_expires=NULL WHERE id=%s", (uid,))
+            conn.commit()
+            return jsonify({"msg": "otp_expired", "error": "Code expired. Please request a new one."}), 401
+
+        cur.execute("UPDATE users SET otp_code=NULL, otp_expires=NULL WHERE id=%s", (uid,))
+        conn.commit()
+        
+        token = jwt.encode(
+            {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
+            app.secret_key, algorithm="HS256"
+        )
+        
+        return jsonify({
+            "msg": "verified", 
+            "token": token, 
+            "username": uname, 
+            "profile_picture": pic or "unknown"
+        })
+        
+    except Exception as e:
+        conn.rollback(); logger.error(f"Verify OTP error: {e}")
+        return jsonify({"msg": "error", "error": "Server error. Please try again."}), 500
+    finally:
+        cur.close(); release_conn(conn)
 @app.route("/api/verify", methods=["GET"])
 @token_required
 def verify_token():
@@ -345,39 +470,43 @@ def signup():
     cur = conn.cursor()
     
     try:
+    
         if email:
             cur.execute("SELECT 1 FROM users WHERE email=%s", (email,))
-            if cur.fetchone(): return jsonify({"msg": "email_used"}), 409
+            if cur.fetchone(): 
+                return jsonify({"msg": "email_used", "error": "Email already registered"}), 409
+            
+
+            cur.execute("SELECT 1 FROM pending_signups WHERE email=%s", (email,))
+            if cur.fetchone():
+                return jsonify({"msg": "pending_exists", "error": "Verification already sent. Check your email."}), 409
+                
         if phone:
             cur.execute("SELECT 1 FROM users WHERE phone=%s", (phone,))
-            if cur.fetchone(): return jsonify({"msg": "phone_used"}), 409
+            if cur.fetchone(): 
+                return jsonify({"msg": "phone_used", "error": "Phone already registered"}), 409
         
-        # Generate unique username
-        username = None
-        for _ in range(10):
-            candidate = name.lower().replace(" ", "")[:12] + str(random.randint(1000, 9999))
-            cur.execute("SELECT 1 FROM users WHERE username=%s", (candidate,))
-            if not cur.fetchone():
-                username = candidate
-                break
-        if not username:
-            return jsonify({"msg": "username_failed"}), 500
+        otp_code = str(random.randint(100000, 999999))
+        expires = datetime.datetime.utcnow() + datetime.timedelta(minutes=10)
         
         hashed = _hash_password(password)
-        cur.execute(
-            "INSERT INTO users (name,email,phone,username,password) VALUES (%s,%s,%s,%s,%s)",
-            (name, email, phone, username, hashed)
-        )
+        cur.execute("""
+            INSERT INTO pending_signups (email, phone, name, password, otp_code, otp_expires)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (email, phone, name, hashed, otp_code, expires))
         conn.commit()
         
-        cur.execute("SELECT id FROM users WHERE username=%s", (username,))
-        uid = cur.fetchone()[0]
-        
-        token = jwt.encode(
-            {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
-            app.secret_key, algorithm="HS256"
-        )
-        return jsonify({"msg": "created", "username": username, "token": token, "profile_picture": "unknown"})
+
+        if email and send_otp_email(email, otp_code):
+            return jsonify({
+                "msg": "otp_sent",
+                "email": email
+            })
+        else:
+          
+            cur.execute("DELETE FROM pending_signups WHERE email=%s", (email,))
+            conn.commit()
+            return jsonify({"msg": "email_failed", "error": "Failed to send verification code"}), 500
         
     except Exception as e:
         conn.rollback()
@@ -385,7 +514,253 @@ def signup():
         return jsonify({"msg": "error"}), 500
     finally:
         cur.close(); release_conn(conn)
+@app.route("/verify_signup_otp", methods=["POST"])
+def verify_signup_otp():
+    data = request.json or {}
+    email = (data.get("email") or "").strip().lower()
+    otp_code = (data.get("otp_code") or "").strip()
+    
+    if not email or not otp_code: 
+        return jsonify({"msg": "missing_fields", "error": "Please enter the code"}), 400
+        
+    conn = get_conn()
+    if not conn: return jsonify({"msg": "db_error", "error": "Server error"}), 503
+    cur = conn.cursor()
+    
+    try:
+        cur.execute("""
+            SELECT id, name, email, phone, password, otp_code, otp_expires
+            FROM pending_signups WHERE email=%s
+        """, (email,))
+        pending = cur.fetchone()
+        
+        if not pending:
+            return jsonify({"msg": "no_pending", "error": "No signup request found. Please sign up again."}), 404
+        
+        pending_id, name, email, phone, hashed_password, stored_otp, expires = pending
+        
 
+        if stored_otp != otp_code:
+            return jsonify({"msg": "invalid_otp", "error": "Wrong code. Please check and try again."}), 401
+            
+        if expires < datetime.datetime.utcnow():
+            cur.execute("DELETE FROM pending_signups WHERE id=%s", (pending_id,))
+            conn.commit()
+            return jsonify({"msg": "otp_expired", "error": "Code expired. Please sign up again."}), 401
+        
+
+        username = None
+        for _ in range(10):
+            candidate = name.lower().replace(" ", "")[:12] + str(random.randint(1000, 9999))
+            cur.execute("SELECT 1 FROM users WHERE username=%s", (candidate,))
+            if not cur.fetchone():
+                username = candidate
+                break
+        
+        if not username:
+            return jsonify({"msg": "username_failed", "error": "Failed to generate username"}), 500
+        
+
+        cur.execute("""
+            INSERT INTO users (name, email, phone, username, password, account_status)
+            VALUES (%s, %s, %s, %s, %s, 'pending_verification')
+        """, (name, email, phone, username, hashed_password))
+        
+     
+        cur.execute("DELETE FROM pending_signups WHERE id=%s", (pending_id,))
+        conn.commit()
+        
+
+        cur.execute("SELECT id FROM users WHERE username=%s", (username,))
+        uid = cur.fetchone()[0]
+        
+     
+        token = jwt.encode(
+            {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)},
+            app.secret_key, algorithm="HS256"
+        )
+        
+        return jsonify({
+            "msg": "verified", 
+            "token": token, 
+            "username": username,
+            "needs_welcome": True
+        })
+        
+    except Exception as e:
+        conn.rollback(); logger.error(f"Verify signup OTP error: {e}")
+        return jsonify({"msg": "error", "error": "Server error"}), 500
+    finally:
+        cur.close(); release_conn(conn)
+@app.route("/resend_signup_otp", methods=["POST"])
+@limiter.limit("3 per minute")
+def resend_signup_otp():
+    data = request.json or {}
+    email = (data.get("email") or "").strip().lower()
+    
+    if not email:
+        return jsonify({"msg": "email_required"}), 400
+    
+    conn = get_conn()
+    if not conn: return jsonify({"msg": "db_error"}), 503
+    cur = conn.cursor()
+    
+    try:
+        cur.execute("SELECT id, name, phone, password FROM pending_signups WHERE email=%s", (email,))
+        pending = cur.fetchone()
+        
+        if not pending:
+            return jsonify({"msg": "no_pending", "error": "No signup request found"}), 404
+        
+        pending_id, name, phone, hashed_password = pending
+        
+
+        otp_code = str(random.randint(100000, 999999))
+        expires = datetime.datetime.utcnow() + datetime.timedelta(minutes=10)
+        
+
+        cur.execute("""
+            UPDATE pending_signups 
+            SET otp_code=%s, otp_expires=%s 
+            WHERE id=%s
+        """, (otp_code, expires, pending_id))
+        conn.commit()
+        
+
+        if send_otp_email(email, otp_code):
+            return jsonify({"msg": "otp_resent"})
+        else:
+            return jsonify({"msg": "email_failed"}), 500
+        
+    except Exception as e:
+        conn.rollback(); logger.error(f"Resend OTP error: {e}")
+        return jsonify({"msg": "error"}), 500
+    finally:
+        cur.close(); release_conn(conn)
+# ─────────────────────────────────────────────────────────────
+# 🎉 COMPLETE GOOGLE WELCOME (After Google Auth)
+# ─────────────────────────────────────────────────────────────
+@app.route("/complete_google_welcome", methods=["POST"])
+@token_required
+def complete_google_welcome():
+    name = request.form.get("name", "").strip()
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    profile_image = request.files.get("profile_image")
+    
+    if not name or not username or not password:
+        return jsonify({"msg": "missing_fields", "error": "All fields are required"}), 400
+    
+    if len(password) < 6:
+        return jsonify({"msg": "password_too_short", "error": "Password must be at least 6 characters"}), 400
+    
+    conn = get_conn()
+    if not conn: return jsonify({"msg": "db_error"}), 503
+    cur = conn.cursor()
+    
+    try:
+        uid = resolve_user_id(cur, g.user_id)
+        if not uid: return jsonify({"msg": "user_not_found"}), 404
+        
+       
+        cur.execute("SELECT 1 FROM users WHERE username=%s AND id!=%s", (username, uid))
+        if cur.fetchone():
+            return jsonify({"msg": "username_taken", "error": "Username already taken"}), 409
+        
+   
+        hashed_password = _hash_password(password)
+        
+        updates = ["name=%s", "username=%s", "password=%s", "account_status='fully_setup'"]
+        params = [name, username, hashed_password]
+        
+
+        if profile_image and profile_image.filename:
+            res = cloudinary.uploader.upload(profile_image, folder='socialgrid/profiles')
+            updates.append("profile_picture=%s")
+            params.append(res["secure_url"])
+        
+        params.append(uid)
+        cur.execute(f"UPDATE users SET {', '.join(updates)} WHERE id=%s", params)
+        conn.commit()
+        
+
+        token = jwt.encode(
+            {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
+            app.secret_key, algorithm="HS256"
+        )
+        
+        cur.execute("SELECT username, profile_picture FROM users WHERE id=%s", (uid,))
+        user_data = cur.fetchone()
+        
+        return jsonify({
+            "msg": "welcome_complete",
+            "token": token,
+            "username": user_data[0],
+            "profile_picture": user_data[1] or "unknown"
+        })
+        
+    except Exception as e:
+        conn.rollback(); logger.error(f"Complete Google welcome error: {e}")
+        return jsonify({"msg": "error", "error": "Server error"}), 500
+    finally:
+        cur.close(); release_conn(conn)
+@app.route("/complete_welcome", methods=["POST"])
+@token_required
+def complete_welcome():
+    profile_image = request.files.get("profile_image")
+    new_username = request.form.get("username", "").strip()
+    
+    conn = get_conn()
+    if not conn: return jsonify({"msg": "db_error"}), 503
+    cur = conn.cursor()
+    
+    try:
+        uid = resolve_user_id(cur, g.user_id)
+        if not uid: return jsonify({"msg": "user_not_found"}), 404
+        
+        updates = []
+        params = []
+        
+        if profile_image and profile_image.filename:
+            res = cloudinary.uploader.upload(profile_image, folder='socialgrid/profiles')
+            updates.append("profile_picture=%s")
+            params.append(res["secure_url"])
+        
+        if new_username:
+            cur.execute("SELECT 1 FROM users WHERE username=%s AND id!=%s", (new_username, uid))
+            if cur.fetchone():
+                return jsonify({"msg": "username_taken"}), 409
+            updates.append("username=%s")
+            params.append(new_username)
+       
+        updates.append("account_status='fully_setup'")
+        
+        if updates:
+            params.append(uid)
+            cur.execute(f"UPDATE users SET {', '.join(updates)} WHERE id=%s", params)
+            conn.commit()
+        
+       
+        token = jwt.encode(
+            {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
+            app.secret_key, algorithm="HS256"
+        )
+        
+        cur.execute("SELECT username, profile_picture FROM users WHERE id=%s", (uid,))
+        user_data = cur.fetchone()
+        
+        return jsonify({
+            "msg": "welcome_complete",
+            "token": token,
+            "username": user_data[0],
+            "profile_picture": user_data[1] or "unknown"
+        })
+        
+    except Exception as e:
+        conn.rollback(); logger.error(f"Complete welcome error: {e}")
+        return jsonify({"msg": "error"}), 500
+    finally:
+        cur.close(); release_conn(conn)
 @app.route("/login", methods=["POST"])
 @limiter.limit("10 per minute")
 def login():
@@ -411,22 +786,36 @@ def login():
         if not user: return jsonify({"msg": "not_found"}), 401
         
         uid, uname, stored_pw, pic = user
+       
         if not _verify_password(password, stored_pw):
             return jsonify({"msg": "wrong_password"}), 401
         
-        # Migrate old password if needed
         if stored_pw and "$" not in stored_pw:
             _maybe_migrate_password(cur, conn, uid, password)
         
-        token = jwt.encode(
-            {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
-            app.secret_key, algorithm="HS256"
+        
+        otp_code = str(random.randint(100000, 999999))
+        expires = datetime.datetime.utcnow() + datetime.timedelta(minutes=10)
+        
+        cur.execute(
+            "UPDATE users SET otp_code=%s, otp_expires=%s WHERE id=%s",
+            (otp_code, expires, uid)
         )
-        return jsonify({"msg": "success", "token": token, "profile_picture": pic or "unknown"})
+        conn.commit()
+        
+       
+        if email and send_otp_email(email, otp_code):
+            return jsonify({"msg": "otp_sent"}) 
+        else:
+            
+            token = jwt.encode(
+                {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
+                app.secret_key, algorithm="HS256"
+            )
+            return jsonify({"msg": "success", "token": token, "profile_picture": pic or "unknown"})
         
     finally:
         cur.close(); release_conn(conn)
-
 @app.route("/google-login", methods=["POST"])
 @limiter.limit("10 per minute")
 def google_login():
@@ -443,17 +832,45 @@ def google_login():
     cur = conn.cursor()
     
     try:
-        cur.execute("SELECT id,username,profile_picture FROM users WHERE email=%s", (email,))
+        cur.execute("SELECT id,username,profile_picture,account_status FROM users WHERE email=%s", (email,))
         user = cur.fetchone()
         
         if user:
-            # Existing user - update picture if changed
-            uid, username, old_pic = user
-            if picture != "unknown" and picture != old_pic:
-                cur.execute("UPDATE users SET profile_picture=%s WHERE id=%s", (picture, uid))
-                conn.commit()
+            uid, username, old_pic, status = user
+            
+
+            if status == 'fully_setup':
+                if picture != "unknown" and picture != old_pic:
+                    cur.execute("UPDATE users SET profile_picture=%s WHERE id=%s", (picture, uid))
+                    conn.commit()
+                
+                token = jwt.encode(
+                    {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
+                    app.secret_key, algorithm="HS256"
+                )
+                return jsonify({
+                    "msg": "success", 
+                    "token": token, 
+                    "username": username, 
+                    "profile_picture": picture or "unknown",
+                    "needs_welcome": False
+                })
+            else:
+              
+                token = jwt.encode(
+                    {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)},
+                    app.secret_key, algorithm="HS256"
+                )
+                return jsonify({
+                    "msg": "needs_setup",
+                    "token": token,
+                    "username": username,
+                    "name": name,
+                    "profile_picture": picture,
+                    "needs_welcome": True
+                })
         else:
-            # New user - create account
+
             username = None
             for _ in range(10):
                 candidate = name.lower().replace(" ", "")[:12] + str(random.randint(1000, 9999))
@@ -465,25 +882,32 @@ def google_login():
                 return jsonify({"msg": "username_failed"}), 500
             
             cur.execute(
-                "INSERT INTO users (name,email,username,password,profile_picture) VALUES (%s,%s,%s,%s,%s)",
-                (name, email, username, "google_auth", picture)
+                """INSERT INTO users (name,email,username,password,profile_picture,account_status) 
+                   VALUES (%s,%s,%s,'google_auth',%s,'pending_google_setup')""",
+                (name, email, username, picture)
             )
             conn.commit()
             cur.execute("SELECT id FROM users WHERE username=%s", (username,))
             uid = cur.fetchone()[0]
 
-        token = jwt.encode(
-            {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
-            app.secret_key, algorithm="HS256"
-        )
-        return jsonify({"msg": "success", "token": token, "username": username, "profile_picture": picture})
+            token = jwt.encode(
+                {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)},
+                app.secret_key, algorithm="HS256"
+            )
+            return jsonify({
+                "msg": "needs_setup",
+                "token": token,
+                "username": username,
+                "name": name,
+                "profile_picture": picture,
+                "needs_welcome": True
+            })
         
     except Exception as e:
         conn.rollback(); logger.error(f"Google login: {e}")
         return jsonify({"msg": "error"}), 500
     finally:
         cur.close(); release_conn(conn)
-
 # ─────────────────────────────────────────────────────────────
 # Posts Routes
 # ─────────────────────────────────────────────────────────────
@@ -1950,11 +2374,13 @@ def mark_notifications_read():
 # Database Initialization
 # ─────────────────────────────────────────────────────────────
 def init_db():
+    
     conn = get_conn()
     if not conn: return False
     cur = conn.cursor()
     
     try:
+        cur.execute("DELETE FROM pending_signups WHERE created_at < NOW() - INTERVAL '1 hour'")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY, name TEXT, email TEXT UNIQUE, phone TEXT UNIQUE,
@@ -2027,15 +2453,27 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_users_email          ON users(email);
             CREATE INDEX IF NOT EXISTS idx_reactions_msg        ON message_reactions(message_id);
             CREATE INDEX IF NOT EXISTS idx_users_last_seen      ON users(last_seen DESC);
-              CREATE TABLE IF NOT EXISTS notifications (
+                         CREATE TABLE IF NOT EXISTS notifications (
                 id SERIAL PRIMARY KEY,
                 receiver_id INT REFERENCES users(id) ON DELETE CASCADE,
                 actor_id INT REFERENCES users(id) ON DELETE CASCADE,
-                type TEXT CHECK (type IN ('like', 'comment', 'follow')),
+                type TEXT, CHECK
                 post_id INT REFERENCES posts(id) ON DELETE CASCADE,
                 is_read BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT NOW()
             );
+            
+
+            DO $$ 
+            BEGIN
+                EXECUTE (
+                    SELECT 'ALTER TABLE notifications DROP CONSTRAINT ' || conname || ';'
+                    FROM pg_constraint
+                    WHERE conrelid = 'notifications'::regclass AND contype = 'c'
+                );
+            EXCEPTION WHEN OTHERS THEN NULL;
+            END $$;
+            
             CREATE INDEX IF NOT EXISTS idx_notif_receiver ON notifications(receiver_id, is_read, created_at DESC);
         """)
         conn.commit()
