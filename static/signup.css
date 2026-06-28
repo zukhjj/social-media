@@ -13,7 +13,7 @@ h1{
     text-shadow: 0px 0px 70px white;
     cursor: pointer;
 }
-#box{
+#box,#auth{
     background: rgba(0, 0, 0, 0.4); 
     backdrop-filter: blur(10px);    
     -webkit-backdrop-filter: blur(10px); 
@@ -167,7 +167,7 @@ input[type="button"]:hover{
     content: ""; flex: 1; height: 1px; background: rgba(255,255,255,0.2); margin: 0 10px;
 }
 
-/* ✅ ✅ ✅ MEDIA QUERIES - ONLY INBOX PARTS MODIFIED ✅ ✅ ✅ */
+
 @media screen and (max-width: 1028px) {
     body {
         display: flex;           
@@ -181,7 +181,7 @@ input[type="button"]:hover{
         background-color: black;
     }
 
-    #box {
+    #box,#auth {
         width: 90%;              
         max-width: 400px;
         margin: 20px auto;          
@@ -364,4 +364,206 @@ input[type="button"]:hover{
 
 .nav-links a:hover {
     opacity: 1;
+}
+/* 1. The Wrapper (Added dark background so white text is visible) */
+.otp-wrapper {
+    
+    padding: 24px;
+    border-radius: 16px;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+/* 2. The Container */
+.otp-container {
+    display: flex;
+    gap: 10px; /* Space between boxes */
+}
+
+/* 3. The Inputs (Your requested style) */
+.otp-input {
+    width: 40px;
+    height: 40px;
+    box-sizing: border-box;
+    background-color: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.4); /* Solid white border */
+    border-radius: 8px;
+    color: white;
+    text-align: center;
+    font-size: 18px;
+    font-weight: 600;
+    outline: none;
+    transition: all 0.2s ease;
+    caret-color: white; /* Makes the blinking cursor white */
+    
+    /* Remove default mobile browser styling */
+    -webkit-appearance: none;
+    -moz-appearance: textfield;
+}
+
+/* 4. Focus State (When typing) */
+.otp-input:focus {
+    border-color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.15);
+}
+
+/* 5. Filled State (When a number is inside) */
+.otp-input.filled {
+    border-color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+/* 6. Mobile Responsiveness (Shrinks slightly on very small screens) */
+@media (max-width: 380px) {
+    .otp-input {
+        width: 36px;
+        height: 40px;
+        font-size: 16px;
+    }
+    .otp-container {
+        gap: 6px;
+    }
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+    20%, 40%, 60%, 80% { transform: translateX(5px); }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+
+.otp-input.error {
+    border-color: #ef4444 !important;
+    background: rgba(239, 68, 68, 0.1) !important;
+    animation: shake 0.5s ease;
+}
+
+.otp-input.success {
+    border-color: #1bc35e !important;
+    background: rgba(27, 195, 94, 0.1) !important;
+}
+/* ══════════════════════════════════════════════════════════════
+   🔘 BUTTON ANIMATIONS & LOADING STATES
+   ══════════════════════════════════════════════════════════════ */
+
+/* ✅ Base button transition */
+button, input[type="submit"], input[type="button"] {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+/* ✅ Hover effect - subtle lift */
+button:hover:not(:disabled), 
+input[type="submit"]:hover:not(:disabled), 
+input[type="button"]:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(27, 195, 94, 0.3);
+}
+
+/* ✅ Active effect - press down */
+button:active:not(:disabled), 
+input[type="submit"]:active:not(:disabled), 
+input[type="button"]:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px rgba(27, 195, 94, 0.2);
+}
+
+/* ✅ Disabled state */
+button:disabled, 
+input[type="submit"]:disabled, 
+input[type="button"]:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+/* ✅ Loading spinner animation */
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.btn-loading {
+    pointer-events: none;
+    position: relative;
+    color: transparent !important;
+}
+
+.btn-loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    margin: -10px 0 0 -10px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+/* ✅ Success animation */
+@keyframes successPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #22c55e, #16a34a) !important;
+    animation: successPulse 0.6s ease;
+    pointer-events: none;
+}
+
+/* ✅ Error shake animation */
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+    20%, 40%, 60%, 80% { transform: translateX(5px); }
+}
+
+.btn-error {
+    animation: shake 0.5s ease;
+    background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+}
+
+/* ✅ Ripple effect on click */
+@keyframes ripple {
+    to {
+        transform: scale(4);
+        opacity: 0;
+    }
+}
+
+button::before, 
+input[type="submit"]::before, 
+input[type="button"]::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.3);
+    transform: translate(-50%, -50%);
+    transition: width 0.6s, height 0.6s;
+    pointer-events: none;
+}
+
+button:active::before, 
+input[type="submit"]:active::before, 
+input[type="button"]:active::before {
+    width: 300px;
+    height: 300px;
+    opacity: 0;
+    transition: 0s;
 }
