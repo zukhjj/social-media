@@ -5,7 +5,20 @@
 
 /* ===== GLOBAL RESET & BASE ===== */
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { margin: 0; height: 100%; }
+html, body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+}
+
+#app-bar {
+    height: 70px; /* your actual header height */
+}
+
+.chat-layout {
+    display: flex;
+    height: calc(100vh - 70px);
+}
 
 /* 🔍 DEBUG: Force visibility to diagnose */
 
@@ -81,7 +94,7 @@ body {
     background: var(--bg-primary);
     color: var(--text-primary);
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-    overflow: hidden;
+    overflow-y: auto;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -116,29 +129,29 @@ body {
 @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); } 50% { box-shadow: 0 0 0 12px transparent; } }
 @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
 @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
-
 .chat-layout {
     display: grid;
     grid-template-columns: 360px 1fr;
-    margin: 64px auto 0;
-    height: calc(100dvh - 64px); 
+    margin: 70px auto 0; 
+    height: calc(100dvh - 70px); 
     max-width: 1400px;
     background: var(--bg-secondary);
     border-radius: var(--radius-lg);
-    overflow: hidden;
     box-shadow: var(--shadow-lg);
     border: 1px solid var(--border-color);
+    overflow: hidden;
 }
-
 /* ===== CONVERSATIONS SIDEBAR ===== */
 .conversations-sidebar {
     border-right: 1px solid var(--border-color);
-    display: flex;
-    flex-direction: column;
+
     background: var(--bg-secondary);
     transition: transform var(--transition-slow);
-    overflow: hidden;
+    
     position: relative;
+     width: 350px;
+    overflow-y: auto;
+    height: 100%;
 }
 .conversations-sidebar::before {
     content: '';
@@ -215,9 +228,9 @@ body {
 
 /* Conversations List */
 .conversations-list {
-    flex: 1;
+    
     min-height: 0;
-    overflow-y: auto;
+    overflow: visible;
     padding: 8px 8px 70px 8px;
     scroll-behavior: smooth;
     overscroll-behavior: contain;
@@ -423,11 +436,21 @@ body {
 /* ===== CHAT MAIN AREA ===== */
 .chat-main { 
     display: flex; 
-    flex-direction: column; 
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden; /* ✅ CRITICAL */
     height: 100%; 
-    min-height: 0; 
-    overflow: hidden; 
+    min-height: 0; /* ✅ CRITICAL: Allows flex children to shrink and scroll */
     background: var(--bg-secondary); 
+    position: relative; 
+}
+
+.chat-active { 
+    display: flex; 
+    flex-direction: column; 
+    flex: 1; 
+    min-height: 0; /* ✅ CRITICAL */
+    overflow: hidden; /* ✅ CRITICAL */
     position: relative; 
 }
 .chat-main::before {
@@ -471,13 +494,6 @@ body {
     line-height: 1.5;
 }
 
-.chat-active { 
-    display: flex; 
-    flex-direction: column; 
-    flex: 1; 
-    min-height: 0; 
-    position: relative; /* ✅ Create stacking context */
-}
 
 /* Chat Header */
 .chat-header { 
@@ -2468,8 +2484,8 @@ body {
     }
     
     .messages-container {
-        padding-bottom: 170px !important;
-        scroll-padding-bottom: 170px !important;
+        padding-bottom: 140px !important; 
+        scroll-padding-bottom: 140px !important;
     }
     
     .scroll-bottom-btn {
@@ -2517,16 +2533,20 @@ body {
         max-width: 95% !important;
     }
 }
+
 @media (max-width: 400px) {
     .chat-input-wrap {
         padding: 10px 12px !important;
+        
         padding-bottom: calc(10px + env(safe-area-inset-bottom)) !important;
     }
     .chat-input {
+        /* REMOVED: width: 40px; (This was squishing your input box!) */
         padding: 10px 14px 10px 40px !important;
+        width: 40px;
         font-size: 15px !important;
     }
-    .chat-send-btn, .chat-attach-btn {
+   .chat-send-btn, .chat-attach-btn {
         width: 38px !important;
         height: 38px !important;
     }
@@ -2535,9 +2555,9 @@ body {
         margin: 0 12px !important;
     }
     .messages-container {
-        padding-bottom: 75px !important;
-        scroll-padding-bottom: 75px !important;
-        margin-bottom: 100px;
+        padding-bottom: 120px !important;
+        scroll-padding-bottom: 120px !important;
+        /* REMOVED: margin-bottom: 100px; (This was breaking the scroll area) */
     }
 }
 
