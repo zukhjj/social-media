@@ -1375,8 +1375,24 @@ async function loadConversationsOptimized() {
     list.querySelectorAll('.conversation-item').forEach(item => { 
         if (!activeUsernames.has(item.dataset.username)) item.remove(); 
     });
-}
-
+}window.filterConversations = function(query) {
+    const conversationsList = document.getElementById("conversations-list");
+    if (!conversationsList) return;
+    
+    const items = conversationsList.querySelectorAll(".conversation-item");
+    const normalizedQuery = query.toLowerCase().trim();
+    
+    items.forEach(item => {
+        const username = item.querySelector(".conversation-name")?.textContent.toLowerCase() || "";
+        const preview = item.querySelector(".conversation-preview")?.textContent.toLowerCase() || "";
+        
+        if (!normalizedQuery || username.includes(normalizedQuery) || preview.includes(normalizedQuery)) {
+            item.style.display = "flex";
+        } else {
+            item.style.display = "none";
+        }
+    });
+};
 // ===== UPDATE CHAT HEADER STATUS =====
 async function updateChatHeaderStatus(username) {
     if (!username) return;
