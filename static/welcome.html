@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="welcome.css">
+    <script src="welcome.js" defer></script>
+    <title>Welcome to Social Grid!</title>
+</head>
+<body>
+    <div class="welcome-container">
+        <div class="welcome-card">
+            <div class="welcome-icon">🎉</div>
+            <h1>Welcome to Social Grid!</h1>
+            <p class="welcome-subtitle">Let's set up your profile</p>
+            
+            <form id="welcome-form" onsubmit="completeWelcome(event)">
+                <!-- Profile Picture Upload -->
+                <div class="profile-pic-section">
+                    <div class="profile-pic-preview" id="pic-preview">
+                        <span class="placeholder-icon">📷</span>
+                    </div>
+                    <label for="profile-pic-input" class="upload-btn">
+                        Upload Profile Picture
+                    </label>
+                    <input type="file" id="profile-pic-input" accept="image/*" style="display:none" onchange="previewImage(this)">
+                    <p class="hint-text">Optional - You can skip this step</p>
+                </div>
+                
+                <!-- Action Buttons -->
+                <div class="action-buttons">
+                    <button type="submit" class="btn-primary">Complete Setup</button>
+                    <button type="button" class="btn-secondary" onclick="skipWelcome()">Skip for now</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

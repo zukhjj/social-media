@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="welcome.css">
+    <script src="welcome.js" defer></script>
+    <title>Complete Your Profile - Social Grid</title>
+</head>
+<body>
+    <div class="welcome-container">
+        <div class="welcome-card">
+            <div class="welcome-icon">✨</div>
+            <h1>Welcome!</h1>
+            <p class="welcome-subtitle">Complete your profile to get started</p>
+            
+            <form id="google-welcome-form" onsubmit="completeGoogleWelcome(event)">
+                <!-- Profile Picture -->
+                <div class="profile-pic-section">
+                    <div class="profile-pic-preview" id="pic-preview">
+                        <span class="placeholder-icon">📷</span>
+                    </div>
+                    <label for="profile-pic-input" class="upload-btn">
+                        Upload Profile Picture
+                    </label>
+                    <input type="file" id="profile-pic-input" accept="image/*" style="display:none" onchange="previewImage(this)">
+                </div>
+                
+                <!-- Name (Pre-filled from Google) -->
+                <div class="input-group">
+                    <label for="google-name">Your Name</label>
+                    <input type="text" id="google-name" placeholder="Your name" required>
+                </div>
+                
+                <!-- Username -->
+                <div class="input-group">
+                    <label for="google-username">Username</label>
+                    <input type="text" id="google-username" placeholder="Choose a username" required>
+                    <p class="error" id="username-error"></p>
+                </div>
+                
+                <!-- Password (Required for Google users) -->
+                <div class="input-group">
+                    <label for="google-password">Create a Password</label>
+                    <input type="password" id="google-password" placeholder="At least 6 characters" required minlength="6">
+                    <p class="hint-text">This password will be used for future logins</p>
+                </div>
+                
+                <!-- Action Button -->
+                <button type="submit" class="btn-primary">Complete Setup</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
