@@ -814,13 +814,16 @@ def login():
         if email and send_otp_email(email, otp_code):
             return jsonify({"msg": "otp_sent"}) 
         else:
-            
             token = jwt.encode(
                 {"user_id": uid, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=30)},
                 app.secret_key, algorithm="HS256"
             )
-            return jsonify({"msg": "success", "token": token, "profile_picture": pic or "unknown"})
-        
+            return jsonify({
+                "msg": "success", 
+                "token": token, 
+                "username": uname,  # ✅ ADDED THIS LINE
+                "profile_picture": pic or "unknown"
+            })
     finally:
         cur.close(); release_conn(conn)
 @app.route("/google-login", methods=["POST"])
