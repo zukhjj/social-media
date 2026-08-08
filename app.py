@@ -1,7 +1,6 @@
 # ══════════════════════════════════════════════════════════════
 # server.py — Social Grid Backend (Flask + PostgreSQL + Cloudinary)
 # ══════════════════════════════════════════════════════════════
-
 import os, sys, logging, time, random, datetime, jwt, threading, hashlib, hmac, json
 from urllib.parse import urlparse
 from functools import wraps
@@ -20,7 +19,6 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "ahmedaminenouily@gmail.com") 
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "bvnn obqn igmy lasa")
-
 # ─────────────────────────────────────────────────────────────
 # Logging Setup
 # ─────────────────────────────────────────────────────────────
@@ -30,7 +28,6 @@ logging.basicConfig(
     stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
-
 # ─────────────────────────────────────────────────────────────
 # Flask App Setup
 # ─────────────────────────────────────────────────────────────
@@ -382,6 +379,7 @@ def verify_login_otp():
     data = request.json or {}
     email = (data.get("email") or "").strip().lower()
     otp_code = (data.get("otp_code") or "").strip()
+    reset_mode = data.get("reset_mode", False)
     
     if not email or not otp_code: 
         return jsonify({"msg": "missing_fields", "error": "Please enter the code"}), 400
@@ -397,9 +395,9 @@ def verify_login_otp():
             return jsonify({"msg": "user_not_found", "error": "User not found"}), 404
             
         uid, uname, pic, stored_otp, expires = user
-
+        
         if not stored_otp:
-            return jsonify({"msg": "no_otp_requested", "error": "No code was requested. Please try logging in again."}), 401
+            return jsonify({"msg": "no_otp_requested", "error": "No code was requested. Please try again."}), 401
             
         if stored_otp != otp_code:
             return jsonify({"msg": "invalid_otp", "error": "Wrong code. Please check and try again."}), 401
@@ -408,7 +406,15 @@ def verify_login_otp():
             cur.execute("UPDATE users SET otp_code=NULL, otp_expires=NULL WHERE id=%s", (uid,))
             conn.commit()
             return jsonify({"msg": "otp_expired", "error": "Code expired. Please request a new one."}), 401
-
+        
+        if reset_mode:
+            return jsonify({
+                "msg": "verified_for_reset",
+                "can_reset": True,
+                "email": email
+            })
+        
+      
         cur.execute("UPDATE users SET otp_code=NULL, otp_expires=NULL WHERE id=%s", (uid,))
         conn.commit()
         
@@ -426,7 +432,7 @@ def verify_login_otp():
         
     except Exception as e:
         conn.rollback(); logger.error(f"Verify OTP error: {e}")
-        return jsonify({"msg": "error", "error": "Server error. Please try again."}), 500
+        return jsonify({"msg": "error", "error": "Server error"}), 500
     finally:
         cur.close(); release_conn(conn)
 @app.route("/api/verify", methods=["GET"])
@@ -703,6 +709,7 @@ def complete_google_welcome():
         conn.rollback(); logger.error(f"Complete Google welcome error: {e}")
         return jsonify({"msg": "error", "error": "Server error"}), 500
     finally:
+
         cur.close(); release_conn(conn)
 @app.route("/complete_welcome", methods=["POST"])
 @token_required
@@ -832,14 +839,17 @@ def google_login():
     cur = conn.cursor()
     
     try:
-        cur.execute("SELECT id,username,profile_picture,account_status FROM users WHERE email=%s", (email,))
+             
+        cur.execute("SELECT id,username,profile_picture,account_status,password FROM users WHERE email=%s", (email,))
         user = cur.fetchone()
         
         if user:
-            uid, username, old_pic, status = user
+            uid, username, old_pic, status, user_pw = user
             
-
-            if status == 'fully_setup':
+         
+            is_setup = (status == 'fully_setup') or (user_pw and user_pw != 'google_auth' and '$' in user_pw)
+            
+            if is_setup:
                 if picture != "unknown" and picture != old_pic:
                     cur.execute("UPDATE users SET profile_picture=%s WHERE id=%s", (picture, uid))
                     conn.commit()
@@ -2276,7 +2286,67 @@ def delete_conversation(username):
         return jsonify({"msg":"error","detail":str(e)}), 500
     finally:
         cur.close(); release_conn(conn)
-
+# ─────────────────────────────────────────────────────────────
+# 🔐 RESET PASSWORD (After OTP Verification)
+# ─────────────────────────────────────────────────────────────
+@app.route("/reset_password", methods=["POST"])
+def reset_password():
+    data = request.json or {}
+    email = (data.get("email") or "").strip().lower()
+    new_password = data.get("new_password", "")
+    
+    if not email or not new_password:
+        return jsonify({"msg": "missing_fields", "error": "All fields are required"}), 400
+    
+    if len(new_password) < 6:
+        return jsonify({"msg": "password_too_short", "error": "Password must be at least 6 characters"}), 400
+    
+    conn = get_conn()
+    if not conn: return jsonify({"msg": "db_error"}), 503
+    cur = conn.cursor()
+    
+    try:
+      
+        cur.execute("SELECT id FROM users WHERE email=%s", (email,))
+        user = cur.fetchone()
+        if not user:
+            return jsonify({"msg": "user_not_found", "error": "User not found"}), 404
+        
+        uid = user[0]
+        
+   
+        cur.execute("SELECT otp_code, otp_expires FROM users WHERE id=%s", (uid,))
+        otp_data = cur.fetchone()
+        
+        if not otp_data or not otp_data[0]:
+            return jsonify({"msg": "no_otp", "error": "Please verify your email first"}), 401
+        
+        stored_otp, expires = otp_data
+        
+        if expires < datetime.datetime.utcnow():
+            cur.execute("UPDATE users SET otp_code=NULL, otp_expires=NULL WHERE id=%s", (uid,))
+            conn.commit()
+            return jsonify({"msg": "otp_expired", "error": "Code expired. Please request a new one."}), 401
+        
+     
+        hashed_password = _hash_password(new_password)
+        cur.execute("""
+            UPDATE users 
+            SET password=%s, otp_code=NULL, otp_expires=NULL 
+            WHERE id=%s
+        """, (hashed_password, uid))
+        conn.commit()
+        
+        return jsonify({
+            "msg": "password_reset",
+            "success": "Password changed successfully! You can now log in."
+        })
+        
+    except Exception as e:
+        conn.rollback(); logger.error(f"Reset password error: {e}")
+        return jsonify({"msg": "error", "error": "Server error"}), 500
+    finally:
+        cur.close(); release_conn(conn)
 @app.route("/get_user_status/<username>", methods=["GET"])
 @token_required
 def get_user_status(username):
@@ -2342,7 +2412,6 @@ def get_notifications():
         return jsonify(notifs)
     finally:
         cur.close(); release_conn(conn)
-
 @app.route("/get_unread_notif_count", methods=["GET"])
 @token_required
 def get_unread_notif_count():
